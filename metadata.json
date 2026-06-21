@@ -1,0 +1,6 @@
+{
+  "name": "Shorts App",
+  "description": "Short video social application similar to TikTok with feed, authentication, and profile tracking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

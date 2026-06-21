@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "684020872519",
+    "project_id": "shorts-app-60722",
+    "storage_bucket": "shorts-app-60722.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:684020872519:android:07457a6adeaec7a9944862",
+        "android_client_info": {
+          "package_name": "com.aistudio.shorts.xtklqm"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyANuivLaBdJcQ6FnajTm_UrIs6aBmUwNiM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
