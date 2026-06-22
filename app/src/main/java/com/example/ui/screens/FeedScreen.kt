@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.material.icons.filled.PlayArrow
 import android.content.Intent
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -81,12 +84,39 @@ fun FeedScreen(
         modifier = Modifier.fillMaxSize()
     ) { page ->
         val video = videos[page]
-        val isPlaying = pagerState.currentPage == page && showCommentsForVideo == null
+        var isPaused by remember(video.id) { mutableStateOf(false) }
+        var showLikeAnim by remember { mutableStateOf(false) }
+        val isActuallyPlaying = pagerState.currentPage == page && showCommentsForVideo == null && !isPaused
 
-        Box(modifier = Modifier.fillMaxSize().background(PureBlack)) {
+        LaunchedEffect(showLikeAnim) {
+            if (showLikeAnim) {
+                kotlinx.coroutines.delay(800)
+                showLikeAnim = false
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(PureBlack)
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onDoubleTap = {
+                            showLikeAnim = true
+                            val uid = appViewModel.currentUser.value?.id
+                            if (uid != null && !video.likedBy.contains(uid)) {
+                                onLikeToggle(video.id)
+                            }
+                        },
+                        onTap = {
+                            isPaused = !isPaused
+                        }
+                    )
+                }
+        ) {
             VideoPlayer(
                 videoUrl = video.videoUrl,
-                isPlaying = isPlaying,
+                isPlaying = isActuallyPlaying,
                 modifier = Modifier.fillMaxSize()
             )
             
@@ -108,6 +138,32 @@ fun FeedScreen(
                 onHashtagClick = onHashtagClick,
                 modifier = Modifier.fillMaxSize()
             )
+            
+            if (showLikeAnim) {
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = showLikeAnim,
+                    enter = androidx.compose.animation.scaleIn() + androidx.compose.animation.fadeIn(),
+                    exit = androidx.compose.animation.scaleOut() + androidx.compose.animation.fadeOut(),
+                    modifier = Modifier.align(Alignment.Center)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Favorite,
+                        contentDescription = "Like",
+                        tint = AccentRed,
+                        modifier = Modifier.size(100.dp)
+                    )
+                }
+            }
+            if (isPaused && !showLikeAnim) {
+                Box(modifier = Modifier.align(Alignment.Center).background(Color.Black.copy(alpha=0.3f), CircleShape).padding(16.dp)) {
+                    Icon(
+                        imageVector = Icons.Default.PlayArrow,
+                        contentDescription = "Play",
+                        tint = Color.White,
+                        modifier = Modifier.size(48.dp)
+                    )
+                }
+            }
         }
     }
 

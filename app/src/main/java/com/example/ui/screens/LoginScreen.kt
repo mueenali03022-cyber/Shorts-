@@ -51,7 +51,7 @@ fun LoginScreen(
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
-                text = "Shorts",
+                text = "Vizo",
                 color = AccentRed,
                 fontSize = 48.sp,
                 fontWeight = FontWeight.Bold

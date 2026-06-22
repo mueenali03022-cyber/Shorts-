@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import coil.compose.AsyncImage
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import android.os.Build
@@ -7,6 +8,9 @@ import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.graphicsLayer
 import com.example.utils.CameraFilter
 import com.example.utils.FilterSystem
+import com.example.utils.CameraEffect
+import com.example.utils.EffectsSystem
+import androidx.compose.animation.core.animateFloat
 import android.Manifest
 import android.content.Context
 import android.net.Uri
@@ -315,6 +319,9 @@ fun CameraPreviewScreen(
     var showFilters by remember { mutableStateOf(false) }
     var selectedFilter by remember { mutableStateOf(FilterSystem.presets.first()) }
     var filterIntensity by remember { mutableStateOf(1f) }
+
+    var showEffects by remember { mutableStateOf(false) }
+    var selectedEffect by remember { mutableStateOf(EffectsSystem.presets.first()) }
     
     val colorMatrixState = remember(selectedFilter, filterIntensity) {
         ColorMatrix(FilterSystem.getIntensityMatrix(selectedFilter.matrix, filterIntensity))
@@ -363,15 +370,47 @@ fun CameraPreviewScreen(
     }
 
     val mainExecutor: Executor = ContextCompat.getMainExecutor(context)
+    
+    val infiniteTransition = androidx.compose.animation.core.rememberInfiniteTransition()
+    val shakeOffset by infiniteTransition.animateFloat(
+        initialValue = -5f,
+        targetValue = 5f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            animation = androidx.compose.animation.core.tween(50, easing = androidx.compose.animation.core.FastOutLinearInEasing),
+            repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
+        )
+    )
+    val glitchOffset by infiniteTransition.animateFloat(
+        initialValue = -20f,
+        targetValue = 20f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            animation = androidx.compose.animation.core.tween(20, easing = androidx.compose.animation.core.FastOutLinearInEasing),
+            repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
+        )
+    )
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(
             factory = { previewView },
             modifier = Modifier.fillMaxSize().graphicsLayer {
+                scaleX = selectedEffect.scale
+                scaleY = selectedEffect.scale
+                rotationZ = selectedEffect.rotation
+                translationX = selectedEffect.translationX + if (selectedEffect.isGlitch) glitchOffset else if (selectedEffect.isShake) shakeOffset else 0f
+                translationY = selectedEffect.translationY + if (selectedEffect.isShake) shakeOffset else 0f
+                alpha = selectedEffect.alpha
+                
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     val floatArray = FilterSystem.getIntensityMatrix(selectedFilter.matrix, filterIntensity)
-                    val filter = android.graphics.ColorMatrixColorFilter(floatArray)
-                    renderEffect = android.graphics.RenderEffect.createColorFilterEffect(filter).asComposeRenderEffect()
+                    val colorFilter = android.graphics.ColorMatrixColorFilter(floatArray)
+                    val colorEffect = android.graphics.RenderEffect.createColorFilterEffect(colorFilter)
+                    
+                    if (selectedEffect.blur > 0f) {
+                        val blurEffect = android.graphics.RenderEffect.createBlurEffect(selectedEffect.blur, selectedEffect.blur, android.graphics.Shader.TileMode.MIRROR)
+                        renderEffect = android.graphics.RenderEffect.createChainEffect(colorEffect, blurEffect).asComposeRenderEffect()
+                    } else {
+                        renderEffect = colorEffect.asComposeRenderEffect()
+                    }
                 }
             }
         )
@@ -484,7 +523,7 @@ fun CameraPreviewScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    IconButton(onClick = { /* Effects */ }, modifier = Modifier.background(Color.Black.copy(0.3f), CircleShape)) {
+                    IconButton(onClick = { showEffects = true }, modifier = Modifier.background(Color.Black.copy(0.3f), CircleShape)) {
                         Icon(Icons.Default.AutoAwesome, contentDescription = "Effects", tint = Color.White, modifier = Modifier.size(24.dp))
                     }
                     Text("Effects", color = Color.White, fontSize = 12.sp, modifier = Modifier.padding(top=4.dp))
@@ -628,9 +667,101 @@ fun CameraPreviewScreen(
                                         .background(if (selectedFilter == filter) AccentRed else Color.Transparent)
                                         .padding(2.dp)
                                 ) {
-                                    Box(modifier = Modifier.fillMaxSize().clip(CircleShape).background(Color.Gray))
+                                    AsyncImage(
+                                        model = "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=200&h=200&fit=crop",
+                                        contentDescription = "Filter",
+                                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize().clip(CircleShape),
+                                        colorFilter = androidx.compose.ui.graphics.ColorFilter.colorMatrix(
+                                            androidx.compose.ui.graphics.ColorMatrix(FilterSystem.getIntensityMatrix(filter.matrix, 1f))
+                                        )
+                                    )
                                 }
                                 Text(filter.name, color = Color.White, fontSize = 12.sp, modifier = Modifier.padding(top=4.dp))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        if (showEffects) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Transparent)
+                    .clickable(
+                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                        indication = null
+                    ) { showEffects = false }
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.BottomCenter)
+                        .background(Color.Black.copy(alpha = 0.8f))
+                        .clickable(
+                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                            indication = null
+                        ) {} // Block clicks
+                ) {
+                    Spacer(Modifier.height(16.dp))
+                    
+                    val categories = EffectsSystem.categories
+                    var selectedCategory by remember { mutableStateOf<String?>(categories.first()) }
+                    
+                    androidx.compose.foundation.lazy.LazyRow(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        items(categories.size) { index ->
+                            val cat = categories[index]
+                            Text(
+                                text = cat,
+                                color = if (selectedCategory == cat) Color.White else Color.Gray,
+                                fontWeight = if (selectedCategory == cat) FontWeight.Bold else FontWeight.Normal,
+                                modifier = Modifier.clickable { selectedCategory = cat }
+                            )
+                        }
+                    }
+                    
+                    val filteredList = remember(selectedCategory) {
+                        if (selectedCategory == null) EffectsSystem.presets else EffectsSystem.presets.filter { it.category == selectedCategory || it.id == "e_0" }
+                    }
+                    
+                    androidx.compose.foundation.lazy.LazyRow(
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 32.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        items(filteredList.size) { index ->
+                            val effect = filteredList[index]
+                            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { selectedEffect = effect }) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(60.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(if (selectedEffect == effect) AccentRed else Color.Transparent)
+                                        .padding(2.dp)
+                                ) {
+                                    AsyncImage(
+                                        model = "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=200&h=200&fit=crop",
+                                        contentDescription = "Effect",
+                                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .graphicsLayer {
+                                                scaleX = effect.scale
+                                                scaleY = effect.scale
+                                                rotationZ = effect.rotation
+                                                alpha = effect.alpha
+                                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S && effect.blur > 0f) {
+                                                    renderEffect = android.graphics.RenderEffect.createBlurEffect(effect.blur, effect.blur, android.graphics.Shader.TileMode.MIRROR).asComposeRenderEffect()
+                                                }
+                                            }
+                                    )
+                                }
+                                Text(effect.name, color = Color.White, fontSize = 12.sp, modifier = Modifier.padding(top=4.dp))
                             }
                         }
                     }

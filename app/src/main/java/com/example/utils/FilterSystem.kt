@@ -29,7 +29,7 @@ object FilterSystem {
         )
         
         categories.forEach { category ->
-            for (i in 1..80) {
+            for (i in 1..10) {
                 val filter = when (category) {
                     "B&W" -> {
                         val intensity = 0.5f + (i * 0.005f)

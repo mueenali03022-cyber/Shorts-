@@ -6,7 +6,7 @@ object MockData {
         username = "mueenali",
         name = "Mueen Ali",
         profilePhoto = "https://i.pravatar.cc/150?u=mueen",
-        bio = "Building awesome Android apps. Creator of Shorts.",
+        bio = "Building awesome Android apps. Creator of Vizo.",
         followers = 1205,
         following = 45,
         likes = 15300
