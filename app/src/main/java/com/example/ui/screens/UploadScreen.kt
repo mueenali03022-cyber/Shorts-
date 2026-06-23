@@ -6,12 +6,13 @@ import androidx.compose.ui.graphics.ColorMatrix
 import android.os.Build
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.graphicsLayer
-import com.example.utils.CameraFilter
-import com.example.utils.FilterSystem
-import com.example.utils.CameraEffect
-import com.example.utils.EffectsSystem
+import com.example.utils.AREffect
+import com.example.utils.AREffectType
+import com.example.utils.AREffectsSystem
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.animation.core.animateFloat
 import android.Manifest
 import android.content.Context
@@ -318,16 +319,8 @@ fun CameraPreviewScreen(
     var isFlashOn by remember { mutableStateOf(false) }
     var camera by remember { mutableStateOf<androidx.camera.core.Camera?>(null) }
     
-    var showFilters by remember { mutableStateOf(false) }
-    var selectedFilter by remember { mutableStateOf(FilterSystem.presets.first()) }
-    var filterIntensity by remember { mutableStateOf(1f) }
-
     var showEffects by remember { mutableStateOf(false) }
-    var selectedEffect by remember { mutableStateOf(EffectsSystem.presets.first()) }
-    
-    val colorMatrixState = remember(selectedFilter, filterIntensity) {
-        ColorMatrix(FilterSystem.getIntensityMatrix(selectedFilter.matrix, filterIntensity))
-    }
+    var selectedEffect by remember { mutableStateOf(AREffectsSystem.presets.first()) }
     
     val galleryLauncher = rememberLauncherForActivityResult(contract = ActivityResultContracts.GetContent()) { uri: Uri? ->
         if (uri != null) {
@@ -429,75 +422,107 @@ fun CameraPreviewScreen(
         AndroidView(
             factory = { previewView },
             modifier = Modifier.fillMaxSize().graphicsLayer {
-                scaleX = selectedEffect.scale
-                scaleY = selectedEffect.scale
-                rotationZ = selectedEffect.rotation
-                translationX = selectedEffect.translationX + if (selectedEffect.isGlitch) glitchOffset else if (selectedEffect.isShake) shakeOffset else 0f
-                translationY = selectedEffect.translationY + if (selectedEffect.isShake) shakeOffset else 0f
-                alpha = selectedEffect.alpha
+                if (selectedEffect.type == AREffectType.GLITCH) {
+                    translationX = glitchOffset
+                }
                 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    val floatArray = FilterSystem.getIntensityMatrix(selectedFilter.matrix, filterIntensity)
-                    var currentRenderEffect = android.graphics.RenderEffect.createColorFilterEffect(android.graphics.ColorMatrixColorFilter(floatArray))
+                    var currentRenderEffect: android.graphics.RenderEffect? = null
                     
                     if (selectedEffect.colorMatrix != null) {
-                        val effectColorEffect = android.graphics.RenderEffect.createColorFilterEffect(android.graphics.ColorMatrixColorFilter(selectedEffect.colorMatrix!!))
-                        currentRenderEffect = android.graphics.RenderEffect.createChainEffect(effectColorEffect, currentRenderEffect)
+                        currentRenderEffect = android.graphics.RenderEffect.createColorFilterEffect(android.graphics.ColorMatrixColorFilter(selectedEffect.colorMatrix!!))
                     }
-
-                    if (selectedEffect.blur > 0f) {
-                        val blurEffect = android.graphics.RenderEffect.createBlurEffect(selectedEffect.blur, selectedEffect.blur, android.graphics.Shader.TileMode.MIRROR)
-                        currentRenderEffect = android.graphics.RenderEffect.createChainEffect(blurEffect, currentRenderEffect)
+                    if (selectedEffect.type == AREffectType.BEAUTY_SMOOTH) {
+                        val blurEffect = android.graphics.RenderEffect.createBlurEffect(10f, 10f, android.graphics.Shader.TileMode.MIRROR)
+                        currentRenderEffect = if (currentRenderEffect != null) {
+                            android.graphics.RenderEffect.createChainEffect(blurEffect, currentRenderEffect)
+                        } else blurEffect
                     }
-                    renderEffect = currentRenderEffect.asComposeRenderEffect()
+                    if (currentRenderEffect != null) {
+                        renderEffect = currentRenderEffect.asComposeRenderEffect()
+                    }
                 }
             }
         )
 
-        if (selectedEffect.category in listOf("Face filters", "Beauty filter", "Skin smooth", "Eye enhancement", "Face reshape")) {
+        if (selectedEffect.type != AREffectType.NONE && selectedEffect.type != AREffectType.NEON && selectedEffect.type != AREffectType.GLITCH && selectedEffect.type != AREffectType.VHS && selectedEffect.type != AREffectType.CINEMATIC && selectedEffect.type != AREffectType.VINTAGE) {
             androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
-                // Approximate scaling from 480x640 to screen size
-                // Depending on screen aspect ratio and preview crop this might be offset,
-                // but good enough for a conceptual proof of face overlay.
                 val scaleX = size.width / 480f 
                 val scaleY = size.height / 640f
                 val isFront = lensFacing == CameraSelector.LENS_FACING_FRONT
 
                 for (face in detectedFaces) {
                     val rect = face.boundingBox
-                    // Flip X if front camera
                     val origLeft = rect.left.toFloat()
                     val origRight = rect.right.toFloat()
                     val left = (if (isFront) 480f - origRight else origLeft) * scaleX
                     val right = (if (isFront) 480f - origLeft else origRight) * scaleX
                     val top = rect.top * scaleY
                     val bottom = rect.bottom * scaleY
+                    val centerX = left + (right - left) / 2
+                    val centerY = top + (bottom - top) / 2
                     
-                    if (selectedEffect.category == "Face filters") {
-                         drawRoundRect(
-                             color = AccentRed.copy(alpha=0.5f),
-                             topLeft = androidx.compose.ui.geometry.Offset(left, top - 40f),
-                             size = androidx.compose.ui.geometry.Size(right - left, 60f),
-                             cornerRadius = androidx.compose.ui.geometry.CornerRadius(20f)
-                         )
-                    } else if (selectedEffect.category == "Eye enhancement") {
+                    val paint = android.graphics.Paint().apply {
+                        textSize = (right - left) * 1.5f
+                        textAlign = android.graphics.Paint.Align.CENTER
+                    }
+
+                    if (selectedEffect.type == AREffectType.BEAUTY_SMOOTH) {
+                        drawOval(
+                             color = Color.White.copy(alpha=0.1f),
+                             topLeft = androidx.compose.ui.geometry.Offset(left, top),
+                             size = androidx.compose.ui.geometry.Size(right - left, bottom - top)
+                        )
+                    } else if (selectedEffect.type == AREffectType.MAKEUP) {
+                        drawOval(
+                             color = AccentRed.copy(alpha=0.15f),
+                             topLeft = androidx.compose.ui.geometry.Offset(left + 20f, top + 20f),
+                             size = androidx.compose.ui.geometry.Size((right - left) - 40f, (bottom - top) - 40f)
+                        )
+                    } else if (selectedEffect.type == AREffectType.ANIME_EYES) {
                          val leftEye = face.getLandmark(com.google.mlkit.vision.face.FaceLandmark.LEFT_EYE)
                          val rightEye = face.getLandmark(com.google.mlkit.vision.face.FaceLandmark.RIGHT_EYE)
                          if (leftEye != null) {
                              val lx = (if (isFront) 480f - leftEye.position.x else leftEye.position.x) * scaleX
-                             drawCircle(Color.Cyan.copy(alpha=0.6f), radius = 30f, center = androidx.compose.ui.geometry.Offset(lx, leftEye.position.y * scaleY))
+                             drawCircle(Color.White.copy(alpha=0.4f), radius = 40f, center = androidx.compose.ui.geometry.Offset(lx, leftEye.position.y * scaleY))
+                             drawCircle(Color.Blue.copy(alpha=0.8f), radius = 20f, center = androidx.compose.ui.geometry.Offset(lx, leftEye.position.y * scaleY))
                          }
                          if (rightEye != null) {
                              val rx = (if (isFront) 480f - rightEye.position.x else rightEye.position.x) * scaleX
-                             drawCircle(Color.Cyan.copy(alpha=0.6f), radius = 30f, center = androidx.compose.ui.geometry.Offset(rx, rightEye.position.y * scaleY))
+                             drawCircle(Color.White.copy(alpha=0.4f), radius = 40f, center = androidx.compose.ui.geometry.Offset(rx, rightEye.position.y * scaleY))
+                             drawCircle(Color.Blue.copy(alpha=0.8f), radius = 20f, center = androidx.compose.ui.geometry.Offset(rx, rightEye.position.y * scaleY))
                          }
-                    } else {
-                         // Default face overlay for others
-                         drawOval(
-                             color = Color.Yellow.copy(alpha=0.15f),
-                             topLeft = androidx.compose.ui.geometry.Offset(left, top),
-                             size = androidx.compose.ui.geometry.Size(right - left, bottom - top)
-                         )
+                    } else if (selectedEffect.type == AREffectType.FACE_DECORATION) {
+                         val nose = face.getLandmark(com.google.mlkit.vision.face.FaceLandmark.NOSE_BASE)
+                         if (nose != null) {
+                             val nx = (if (isFront) 480f - nose.position.x else nose.position.x) * scaleX
+                             val ny = nose.position.y * scaleY
+                             drawIntoCanvas { canvas ->
+                                 canvas.nativeCanvas.drawText(
+                                     selectedEffect.emojiAsset ?: "🕶️",
+                                     nx,
+                                     ny,
+                                     paint.apply { textSize = (right - left) * 1.2f }
+                                 )
+                             }
+                         }
+                    } else if (selectedEffect.type == AREffectType.FACE_STICKER_SCATTER) {
+                         drawIntoCanvas { canvas ->
+                             val emoji = selectedEffect.emojiAsset ?: "✨"
+                             // Draw a few around the face
+                             canvas.nativeCanvas.drawText(emoji, left, top, paint.apply { textSize = (right-left)*0.5f })
+                             canvas.nativeCanvas.drawText(emoji, right, top, paint)
+                             canvas.nativeCanvas.drawText(emoji, right, bottom, paint)
+                         }
+                    } else if (selectedEffect.type == AREffectType.FACE_MASK) {
+                         drawIntoCanvas { canvas ->
+                             canvas.nativeCanvas.drawText(
+                                 selectedEffect.emojiAsset ?: "🦊",
+                                 centerX,
+                                 centerY + (bottom - top) * 0.2f, // Anchor slightly lower to cover face better
+                                 paint
+                             )
+                         }
                     }
                 }
             }
@@ -555,13 +580,6 @@ fun CameraPreviewScreen(
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(Icons.Default.Face, contentDescription = "Beauty", tint = Color.White)
                         Text("Beauty", color = Color.White, fontSize = 10.sp)
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                IconButton(onClick = { showFilters = !showFilters }) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Default.FilterVintage, contentDescription = "Filter", tint = Color.White)
-                        Text("Filter", color = Color.White, fontSize = 10.sp)
                     }
                 }
                 Spacer(Modifier.height(8.dp))
@@ -675,104 +693,6 @@ fun CameraPreviewScreen(
             }
         }
         
-        if (showFilters) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Transparent)
-                    .clickable(
-                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                        indication = null
-                    ) { showFilters = false }
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .align(Alignment.BottomCenter)
-                        .background(Color.Black.copy(alpha = 0.8f))
-                        .clickable(
-                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                            indication = null
-                        ) {} // Block clicks
-                ) {
-                    if (selectedFilter.id != "f_0") {
-                        Slider(
-                            value = filterIntensity,
-                            onValueChange = { filterIntensity = it },
-                            modifier = Modifier.padding(horizontal = 32.dp, vertical = 8.dp),
-                            valueRange = 0f..1f,
-                            colors = SliderDefaults.colors(
-                                thumbColor = Color.White,
-                                activeTrackColor = AccentRed,
-                                inactiveTrackColor = Color.Gray
-                            )
-                        )
-                    } else {
-                        Spacer(Modifier.height(48.dp))
-                    }
-                    
-                    val categories = FilterSystem.categories
-                    var selectedCategory by remember { mutableStateOf<String?>(null) }
-                    
-                    androidx.compose.foundation.lazy.LazyRow(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        item {
-                            Text(
-                                text = "All",
-                                color = if (selectedCategory == null) Color.White else Color.Gray,
-                                fontWeight = if (selectedCategory == null) FontWeight.Bold else FontWeight.Normal,
-                                modifier = Modifier.clickable { selectedCategory = null }
-                            )
-                        }
-                        items(categories.size) { index ->
-                            val cat = categories[index]
-                            Text(
-                                text = cat,
-                                color = if (selectedCategory == cat) Color.White else Color.Gray,
-                                fontWeight = if (selectedCategory == cat) FontWeight.Bold else FontWeight.Normal,
-                                modifier = Modifier.clickable { selectedCategory = cat }
-                            )
-                        }
-                    }
-                    
-                    val filteredList = remember(selectedCategory) {
-                        if (selectedCategory == null) FilterSystem.presets else FilterSystem.presets.filter { it.category == selectedCategory || it.id == "f_0" }
-                    }
-                    
-                    androidx.compose.foundation.lazy.LazyRow(
-                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 32.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        items(filteredList.size) { index ->
-                            val filter = filteredList[index]
-                            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { selectedFilter = filter }) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(60.dp)
-                                        .clip(CircleShape)
-                                        .background(if (selectedFilter == filter) AccentRed else Color.Transparent)
-                                        .padding(2.dp)
-                                ) {
-                                    AsyncImage(
-                                        model = filter.thumbnailUrl,
-                                        contentDescription = "Filter",
-                                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                                        modifier = Modifier.fillMaxSize().clip(CircleShape),
-                                        colorFilter = androidx.compose.ui.graphics.ColorFilter.colorMatrix(
-                                            androidx.compose.ui.graphics.ColorMatrix(FilterSystem.getIntensityMatrix(filter.matrix, 1f))
-                                        )
-                                    )
-                                }
-                                Text(filter.name, color = Color.White, fontSize = 12.sp, modifier = Modifier.padding(top=4.dp))
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
         if (showEffects) {
             Box(
                 modifier = Modifier
@@ -795,7 +715,7 @@ fun CameraPreviewScreen(
                 ) {
                     Spacer(Modifier.height(16.dp))
                     
-                    val categories = EffectsSystem.categories
+                    val categories = AREffectsSystem.categories
                     var selectedCategory by remember { mutableStateOf<String?>(categories.first()) }
                     
                     androidx.compose.foundation.lazy.LazyRow(
@@ -814,7 +734,7 @@ fun CameraPreviewScreen(
                     }
                     
                     val filteredList = remember(selectedCategory) {
-                        if (selectedCategory == null) EffectsSystem.presets else EffectsSystem.presets.filter { it.category == selectedCategory || it.id == "e_0" }
+                        if (selectedCategory == null) AREffectsSystem.presets else AREffectsSystem.presets.filter { it.category == selectedCategory || it.id == "e_0" }
                     }
                     
                     androidx.compose.foundation.lazy.LazyRow(
@@ -831,33 +751,27 @@ fun CameraPreviewScreen(
                                         .background(if (selectedEffect == effect) AccentRed else Color.Transparent)
                                         .padding(2.dp)
                                 ) {
-                                    AsyncImage(
-                                        model = effect.thumbnailUrl,
-                                        contentDescription = "Effect",
-                                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                                    Box(
+                                        contentAlignment = Alignment.Center,
                                         modifier = Modifier
                                             .fillMaxSize()
                                             .clip(RoundedCornerShape(12.dp))
-                                            .graphicsLayer {
-                                                scaleX = effect.scale
-                                                scaleY = effect.scale
-                                                rotationZ = effect.rotation
-                                                alpha = effect.alpha
-                                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-                                                    var thumbEffect: android.graphics.RenderEffect? = null
-                                                    if (effect.colorMatrix != null) {
-                                                        thumbEffect = android.graphics.RenderEffect.createColorFilterEffect(android.graphics.ColorMatrixColorFilter(effect.colorMatrix))
-                                                    }
-                                                    if (effect.blur > 0f) {
-                                                        val bEff = android.graphics.RenderEffect.createBlurEffect(effect.blur, effect.blur, android.graphics.Shader.TileMode.MIRROR)
-                                                        thumbEffect = if (thumbEffect != null) android.graphics.RenderEffect.createChainEffect(bEff, thumbEffect) else bEff
-                                                    }
-                                                    if (thumbEffect != null) {
-                                                        renderEffect = thumbEffect.asComposeRenderEffect()
-                                                    }
-                                                }
-                                            }
-                                    )
+                                            .background(DarkGray)
+                                    ) {
+                                        if (effect.emojiAsset != null) {
+                                            Text(effect.emojiAsset, fontSize = 28.sp)
+                                        } else if (effect.id == "e_0") {
+                                            Icon(Icons.Default.Block, contentDescription = "None", tint = Color.White)
+                                        } else if (effect.type == AREffectType.VINTAGE || effect.type == AREffectType.CINEMATIC) {
+                                            Icon(Icons.Default.CameraRoll, contentDescription = "Film", tint = Color.White)
+                                        } else if (effect.type == AREffectType.NEON) {
+                                            Icon(Icons.Default.ColorLens, contentDescription = "Neon", tint = Color.Cyan)
+                                        } else if (effect.type == AREffectType.BEAUTY_SMOOTH) {
+                                            Icon(Icons.Default.Face, contentDescription = "Smooth", tint = Color.LightGray)
+                                        } else {
+                                            Icon(Icons.Default.AutoAwesome, contentDescription = "Effect", tint = Color.White)
+                                        }
+                                    }
                                 }
                                 Text(effect.name, color = Color.White, fontSize = 12.sp, modifier = Modifier.padding(top=4.dp))
                             }
