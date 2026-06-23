@@ -10,6 +10,8 @@ import com.example.utils.CameraFilter
 import com.example.utils.FilterSystem
 import com.example.utils.CameraEffect
 import com.example.utils.EffectsSystem
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageProxy
 import androidx.compose.animation.core.animateFloat
 import android.Manifest
 import android.content.Context
@@ -334,11 +336,44 @@ fun CameraPreviewScreen(
     }
 
     val previewView = remember { PreviewView(context) }
+    var detectedFaces by remember { mutableStateOf<List<com.google.mlkit.vision.face.Face>>(emptyList()) }
+    
     val videoCapture = remember {
         val recorder = Recorder.Builder()
             .setQualitySelector(QualitySelector.from(Quality.HIGHEST))
             .build()
         VideoCapture.withOutput(recorder)
+    }
+
+    val imageAnalyzer = remember {
+        val options = com.google.mlkit.vision.face.FaceDetectorOptions.Builder()
+            .setPerformanceMode(com.google.mlkit.vision.face.FaceDetectorOptions.PERFORMANCE_MODE_FAST)
+            .setLandmarkMode(com.google.mlkit.vision.face.FaceDetectorOptions.LANDMARK_MODE_ALL)
+            .build()
+        val detector = com.google.mlkit.vision.face.FaceDetection.getClient(options)
+
+        ImageAnalysis.Builder()
+            .setTargetResolution(android.util.Size(480, 640))
+            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            .build()
+            .also { analysis ->
+                analysis.setAnalyzer(ContextCompat.getMainExecutor(context)) { imageProxy ->
+                    @androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
+                    val mediaImage = imageProxy.image
+                    if (mediaImage != null) {
+                        val image = com.google.mlkit.vision.common.InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+                        detector.process(image)
+                            .addOnSuccessListener { faces ->
+                                detectedFaces = faces
+                            }
+                            .addOnCompleteListener {
+                                imageProxy.close()
+                            }
+                    } else {
+                        imageProxy.close()
+                    }
+                }
+            }
     }
 
     LaunchedEffect(lensFacing) {
@@ -356,7 +391,8 @@ fun CameraPreviewScreen(
                     lifecycleOwner,
                     cameraSelector,
                     preview,
-                    videoCapture
+                    videoCapture,
+                    imageAnalyzer
                 )
                 camera?.cameraControl?.enableTorch(isFlashOn)
             } catch (exc: Exception) {
@@ -417,6 +453,55 @@ fun CameraPreviewScreen(
                 }
             }
         )
+
+        if (selectedEffect.category in listOf("Face filters", "Beauty filter", "Skin smooth", "Eye enhancement", "Face reshape")) {
+            androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+                // Approximate scaling from 480x640 to screen size
+                // Depending on screen aspect ratio and preview crop this might be offset,
+                // but good enough for a conceptual proof of face overlay.
+                val scaleX = size.width / 480f 
+                val scaleY = size.height / 640f
+                val isFront = lensFacing == CameraSelector.LENS_FACING_FRONT
+
+                for (face in detectedFaces) {
+                    val rect = face.boundingBox
+                    // Flip X if front camera
+                    val origLeft = rect.left.toFloat()
+                    val origRight = rect.right.toFloat()
+                    val left = (if (isFront) 480f - origRight else origLeft) * scaleX
+                    val right = (if (isFront) 480f - origLeft else origRight) * scaleX
+                    val top = rect.top * scaleY
+                    val bottom = rect.bottom * scaleY
+                    
+                    if (selectedEffect.category == "Face filters") {
+                         drawRoundRect(
+                             color = AccentRed.copy(alpha=0.5f),
+                             topLeft = androidx.compose.ui.geometry.Offset(left, top - 40f),
+                             size = androidx.compose.ui.geometry.Size(right - left, 60f),
+                             cornerRadius = androidx.compose.ui.geometry.CornerRadius(20f)
+                         )
+                    } else if (selectedEffect.category == "Eye enhancement") {
+                         val leftEye = face.getLandmark(com.google.mlkit.vision.face.FaceLandmark.LEFT_EYE)
+                         val rightEye = face.getLandmark(com.google.mlkit.vision.face.FaceLandmark.RIGHT_EYE)
+                         if (leftEye != null) {
+                             val lx = (if (isFront) 480f - leftEye.position.x else leftEye.position.x) * scaleX
+                             drawCircle(Color.Cyan.copy(alpha=0.6f), radius = 30f, center = androidx.compose.ui.geometry.Offset(lx, leftEye.position.y * scaleY))
+                         }
+                         if (rightEye != null) {
+                             val rx = (if (isFront) 480f - rightEye.position.x else rightEye.position.x) * scaleX
+                             drawCircle(Color.Cyan.copy(alpha=0.6f), radius = 30f, center = androidx.compose.ui.geometry.Offset(rx, rightEye.position.y * scaleY))
+                         }
+                    } else {
+                         // Default face overlay for others
+                         drawOval(
+                             color = Color.Yellow.copy(alpha=0.15f),
+                             topLeft = androidx.compose.ui.geometry.Offset(left, top),
+                             size = androidx.compose.ui.geometry.Size(right - left, bottom - top)
+                         )
+                    }
+                }
+            }
+        }
         
         Row(
             modifier = Modifier

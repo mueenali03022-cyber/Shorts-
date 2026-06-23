@@ -61,7 +61,7 @@ class MainActivity : ComponentActivity() {
               ) { innerPadding ->
                   NavHost(
                       navController = navController,
-                      startDestination = BottomNavItem.Home.route,
+                      startDestination = BottomNavItem.Upload.route,
                       modifier = Modifier.padding(innerPadding).fillMaxSize()
                   ) {
                       composable(BottomNavItem.Home.route) {

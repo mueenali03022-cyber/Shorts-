@@ -68,11 +68,27 @@ object EffectsSystem {
                         CameraEffect("e_$idCounter", "$category $i", category, colorMatrix = m, thumbnailUrl = thumbnailUrl)
                     }
                     "Face filters", "Beauty filter", "Skin smooth", "Eye enhancement", "Face reshape" -> {
-                        CameraEffect("e_$idCounter", "$category $i", category, blur = 0.5f + (i * 0.05f), scale = 1.05f, thumbnailUrl = thumbnailUrl)
+                        CameraEffect("e_$idCounter", "$category $i", category, blur = 0.5f + (i * 0.05f), thumbnailUrl = thumbnailUrl)
                     }
                     "Background effects" -> CameraEffect("e_$idCounter", "$category $i", category, alpha = 0.8f, blur = 10f, thumbnailUrl = thumbnailUrl)
-                    "Trending" -> CameraEffect("e_$idCounter", "$category $i", category, scale = 1f + (i * 0.02f), rotation = i * 1f, thumbnailUrl = thumbnailUrl)
-                    else -> CameraEffect("e_$idCounter", "$category $i", category, scale = 1f + (i * 0.01f), thumbnailUrl = thumbnailUrl)
+                    "Trending" -> {
+                         val m = floatArrayOf(
+                            1.2f, 0f, 0f, 0f, 10f,
+                            0f, 0.9f, 0f, 0f, 0f,
+                            0f, 0f, 1.1f, 0f, 10f,
+                            0f, 0f, 0f, 1f, 0f
+                        )
+                        CameraEffect("e_$idCounter", "$category $i", category, colorMatrix = m, isGlitch = (i % 2 == 0), thumbnailUrl = thumbnailUrl)
+                    }
+                    else -> {
+                        val m = floatArrayOf(
+                            0.9f, 0f, 0f, 0f, 0f,
+                            0f, 1f, 0f, 0f, 0f,
+                            0f, 0f, 1f, 0f, 0f,
+                            0f, 0f, 0f, 1f, 0f
+                        )
+                        CameraEffect("e_$idCounter", "$category $i", category, colorMatrix = m, thumbnailUrl = thumbnailUrl)
+                    }
                 }
                 list.add(effect)
                 idCounter++
