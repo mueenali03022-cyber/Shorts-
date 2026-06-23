@@ -6,7 +6,8 @@ data class CameraFilter(
     val id: String,
     val name: String,
     val category: String,
-    val matrix: FloatArray
+    val matrix: FloatArray,
+    val thumbnailUrl: String
 )
 
 object FilterSystem {
@@ -24,12 +25,24 @@ object FilterSystem {
                     0f, 1f, 0f, 0f, 0f,
                     0f, 0f, 1f, 0f, 0f,
                     0f, 0f, 0f, 1f, 0f
-                )
+                ),
+                "https://images.unsplash.com/photo-1516259762381-22954d7d3ad2?w=200&h=200&fit=crop"
             )
         )
         
         categories.forEach { category ->
             for (i in 1..10) {
+                val thumbnailUrl = when (category) {
+                    "Beauty" -> "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=200&h=200&fit=crop"
+                    "Color" -> "https://images.unsplash.com/photo-1526045612212-70caf35c14df?w=200&h=200&fit=crop"
+                    "Vintage" -> "https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=200&h=200&fit=crop"
+                    "Cinematic" -> "https://images.unsplash.com/photo-1440404653325-ab127d49abc1?w=200&h=200&fit=crop"
+                    "B&W" -> "https://images.unsplash.com/photo-1509305717900-84f40f78cce9?w=200&h=200&fit=crop"
+                    "Warm" -> "https://images.unsplash.com/photo-1473496169904-658ba7c44d8a?w=200&h=200&fit=crop"
+                    "Cool" -> "https://images.unsplash.com/photo-1517783999520-f068d7431a60?w=200&h=200&fit=crop"
+                    else -> "https://images.unsplash.com/photo-1516259762381-22954d7d3ad2?w=200&h=200&fit=crop"
+                }
+
                 val filter = when (category) {
                     "B&W" -> {
                         val intensity = 0.5f + (i * 0.005f)
@@ -99,7 +112,7 @@ object FilterSystem {
                         )
                     }
                 }
-                list.add(CameraFilter("f_${idCounter}", "$category $i", category, filter))
+                list.add(CameraFilter("f_${idCounter}", "$category $i", category, filter, thumbnailUrl))
                 idCounter++
             }
         }

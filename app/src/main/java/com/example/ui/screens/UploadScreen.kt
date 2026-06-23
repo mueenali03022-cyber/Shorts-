@@ -402,15 +402,18 @@ fun CameraPreviewScreen(
                 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     val floatArray = FilterSystem.getIntensityMatrix(selectedFilter.matrix, filterIntensity)
-                    val colorFilter = android.graphics.ColorMatrixColorFilter(floatArray)
-                    val colorEffect = android.graphics.RenderEffect.createColorFilterEffect(colorFilter)
+                    var currentRenderEffect = android.graphics.RenderEffect.createColorFilterEffect(android.graphics.ColorMatrixColorFilter(floatArray))
                     
+                    if (selectedEffect.colorMatrix != null) {
+                        val effectColorEffect = android.graphics.RenderEffect.createColorFilterEffect(android.graphics.ColorMatrixColorFilter(selectedEffect.colorMatrix!!))
+                        currentRenderEffect = android.graphics.RenderEffect.createChainEffect(effectColorEffect, currentRenderEffect)
+                    }
+
                     if (selectedEffect.blur > 0f) {
                         val blurEffect = android.graphics.RenderEffect.createBlurEffect(selectedEffect.blur, selectedEffect.blur, android.graphics.Shader.TileMode.MIRROR)
-                        renderEffect = android.graphics.RenderEffect.createChainEffect(colorEffect, blurEffect).asComposeRenderEffect()
-                    } else {
-                        renderEffect = colorEffect.asComposeRenderEffect()
+                        currentRenderEffect = android.graphics.RenderEffect.createChainEffect(blurEffect, currentRenderEffect)
                     }
+                    renderEffect = currentRenderEffect.asComposeRenderEffect()
                 }
             }
         )
@@ -668,7 +671,7 @@ fun CameraPreviewScreen(
                                         .padding(2.dp)
                                 ) {
                                     AsyncImage(
-                                        model = "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=200&h=200&fit=crop",
+                                        model = filter.thumbnailUrl,
                                         contentDescription = "Filter",
                                         contentScale = androidx.compose.ui.layout.ContentScale.Crop,
                                         modifier = Modifier.fillMaxSize().clip(CircleShape),
@@ -744,7 +747,7 @@ fun CameraPreviewScreen(
                                         .padding(2.dp)
                                 ) {
                                     AsyncImage(
-                                        model = "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=200&h=200&fit=crop",
+                                        model = effect.thumbnailUrl,
                                         contentDescription = "Effect",
                                         contentScale = androidx.compose.ui.layout.ContentScale.Crop,
                                         modifier = Modifier
@@ -755,8 +758,18 @@ fun CameraPreviewScreen(
                                                 scaleY = effect.scale
                                                 rotationZ = effect.rotation
                                                 alpha = effect.alpha
-                                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S && effect.blur > 0f) {
-                                                    renderEffect = android.graphics.RenderEffect.createBlurEffect(effect.blur, effect.blur, android.graphics.Shader.TileMode.MIRROR).asComposeRenderEffect()
+                                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                                                    var thumbEffect: android.graphics.RenderEffect? = null
+                                                    if (effect.colorMatrix != null) {
+                                                        thumbEffect = android.graphics.RenderEffect.createColorFilterEffect(android.graphics.ColorMatrixColorFilter(effect.colorMatrix))
+                                                    }
+                                                    if (effect.blur > 0f) {
+                                                        val bEff = android.graphics.RenderEffect.createBlurEffect(effect.blur, effect.blur, android.graphics.Shader.TileMode.MIRROR)
+                                                        thumbEffect = if (thumbEffect != null) android.graphics.RenderEffect.createChainEffect(bEff, thumbEffect) else bEff
+                                                    }
+                                                    if (thumbEffect != null) {
+                                                        renderEffect = thumbEffect.asComposeRenderEffect()
+                                                    }
                                                 }
                                             }
                                     )
