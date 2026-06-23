@@ -111,6 +111,8 @@ dependencies {
   // implementation(libs.play.services.location)
   implementation(libs.retrofit)
   implementation(libs.mlkit.facedetection)
+  implementation("com.google.mlkit:face-mesh-detection:16.0.0-beta1")
+  implementation("com.google.mediapipe:tasks-vision:0.10.14")
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
