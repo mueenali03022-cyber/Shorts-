@@ -432,8 +432,8 @@ fun CameraPreviewScreen(
                     if (selectedEffect.colorMatrix != null) {
                         currentRenderEffect = android.graphics.RenderEffect.createColorFilterEffect(android.graphics.ColorMatrixColorFilter(selectedEffect.colorMatrix!!))
                     }
-                    if (selectedEffect.type == AREffectType.BEAUTY_SMOOTH) {
-                        val blurEffect = android.graphics.RenderEffect.createBlurEffect(10f, 10f, android.graphics.Shader.TileMode.MIRROR)
+                    if (selectedEffect.type == AREffectType.BEAUTY_SMOOTH || selectedEffect.type == AREffectType.GLOW) {
+                        val blurEffect = android.graphics.RenderEffect.createBlurEffect(10f * selectedEffect.intensity, 10f * selectedEffect.intensity, android.graphics.Shader.TileMode.MIRROR)
                         currentRenderEffect = if (currentRenderEffect != null) {
                             android.graphics.RenderEffect.createChainEffect(blurEffect, currentRenderEffect)
                         } else blurEffect
@@ -445,7 +445,17 @@ fun CameraPreviewScreen(
             }
         )
 
-        if (selectedEffect.type != AREffectType.NONE && selectedEffect.type != AREffectType.NEON && selectedEffect.type != AREffectType.GLITCH && selectedEffect.type != AREffectType.VHS && selectedEffect.type != AREffectType.CINEMATIC && selectedEffect.type != AREffectType.VINTAGE) {
+        // Only draw Canvas overlays if we're not purely a shader effect
+        val isShaderOnlyEffect = selectedEffect.type in listOf(
+            AREffectType.NONE,
+            AREffectType.NEON,
+            AREffectType.GLITCH,
+            AREffectType.VHS,
+            AREffectType.CINEMATIC,
+            AREffectType.VINTAGE
+        )
+
+        if (!isShaderOnlyEffect) {
             androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
                 val scaleX = size.width / 480f 
                 val scaleY = size.height / 640f
@@ -467,61 +477,85 @@ fun CameraPreviewScreen(
                         textAlign = android.graphics.Paint.Align.CENTER
                     }
 
-                    if (selectedEffect.type == AREffectType.BEAUTY_SMOOTH) {
+                    if (selectedEffect.type == AREffectType.BEAUTY_SMOOTH || selectedEffect.type == AREffectType.GLOW) {
                         drawOval(
-                             color = Color.White.copy(alpha=0.1f),
-                             topLeft = androidx.compose.ui.geometry.Offset(left, top),
-                             size = androidx.compose.ui.geometry.Size(right - left, bottom - top)
+                             color = Color.White.copy(alpha=0.15f * selectedEffect.intensity),
+                             topLeft = androidx.compose.ui.geometry.Offset(left - 20f, top - 20f),
+                             size = androidx.compose.ui.geometry.Size((right - left) + 40f, (bottom - top) + 40f)
                         )
                     } else if (selectedEffect.type == AREffectType.MAKEUP) {
                         drawOval(
-                             color = AccentRed.copy(alpha=0.15f),
+                             color = AccentRed.copy(alpha=0.15f * selectedEffect.intensity),
                              topLeft = androidx.compose.ui.geometry.Offset(left + 20f, top + 20f),
                              size = androidx.compose.ui.geometry.Size((right - left) - 40f, (bottom - top) - 40f)
                         )
-                    } else if (selectedEffect.type == AREffectType.ANIME_EYES) {
+                    } else if (selectedEffect.type == AREffectType.BIG_EYES || selectedEffect.type == AREffectType.ANIME_EYES) {
                          val leftEye = face.getLandmark(com.google.mlkit.vision.face.FaceLandmark.LEFT_EYE)
                          val rightEye = face.getLandmark(com.google.mlkit.vision.face.FaceLandmark.RIGHT_EYE)
                          if (leftEye != null) {
                              val lx = (if (isFront) 480f - leftEye.position.x else leftEye.position.x) * scaleX
-                             drawCircle(Color.White.copy(alpha=0.4f), radius = 40f, center = androidx.compose.ui.geometry.Offset(lx, leftEye.position.y * scaleY))
-                             drawCircle(Color.Blue.copy(alpha=0.8f), radius = 20f, center = androidx.compose.ui.geometry.Offset(lx, leftEye.position.y * scaleY))
+                             drawCircle(Color.White.copy(alpha=0.4f), radius = 60f, center = androidx.compose.ui.geometry.Offset(lx, leftEye.position.y * scaleY))
+                             drawCircle(Color.Blue.copy(alpha=0.8f), radius = 30f, center = androidx.compose.ui.geometry.Offset(lx, leftEye.position.y * scaleY))
                          }
                          if (rightEye != null) {
                              val rx = (if (isFront) 480f - rightEye.position.x else rightEye.position.x) * scaleX
-                             drawCircle(Color.White.copy(alpha=0.4f), radius = 40f, center = androidx.compose.ui.geometry.Offset(rx, rightEye.position.y * scaleY))
-                             drawCircle(Color.Blue.copy(alpha=0.8f), radius = 20f, center = androidx.compose.ui.geometry.Offset(rx, rightEye.position.y * scaleY))
+                             drawCircle(Color.White.copy(alpha=0.4f), radius = 60f, center = androidx.compose.ui.geometry.Offset(rx, rightEye.position.y * scaleY))
+                             drawCircle(Color.Blue.copy(alpha=0.8f), radius = 30f, center = androidx.compose.ui.geometry.Offset(rx, rightEye.position.y * scaleY))
                          }
+                    } else if (selectedEffect.type == AREffectType.FACE_RESHAPE) {
+                         // conceptual squeeze effect for face reshape
+                         drawOval(
+                             color = Color.Black.copy(alpha=0.1f * selectedEffect.intensity),
+                             topLeft = androidx.compose.ui.geometry.Offset(left + 30f, top + 50f),
+                             size = androidx.compose.ui.geometry.Size((right - left) - 60f, (bottom - top) - 80f)
+                         )
                     } else if (selectedEffect.type == AREffectType.FACE_DECORATION) {
                          val nose = face.getLandmark(com.google.mlkit.vision.face.FaceLandmark.NOSE_BASE)
                          if (nose != null) {
                              val nx = (if (isFront) 480f - nose.position.x else nose.position.x) * scaleX
                              val ny = nose.position.y * scaleY
                              drawIntoCanvas { canvas ->
+                                 canvas.save()
+                                 val rot = if (isFront) -face.headEulerAngleZ else face.headEulerAngleZ
+                                 canvas.translate(nx, ny)
+                                 canvas.rotate(rot)
                                  canvas.nativeCanvas.drawText(
                                      selectedEffect.emojiAsset ?: "🕶️",
-                                     nx,
-                                     ny,
+                                     0f,
+                                     0f,
                                      paint.apply { textSize = (right - left) * 1.2f }
                                  )
+                                 canvas.restore()
                              }
                          }
                     } else if (selectedEffect.type == AREffectType.FACE_STICKER_SCATTER) {
                          drawIntoCanvas { canvas ->
                              val emoji = selectedEffect.emojiAsset ?: "✨"
-                             // Draw a few around the face
-                             canvas.nativeCanvas.drawText(emoji, left, top, paint.apply { textSize = (right-left)*0.5f })
-                             canvas.nativeCanvas.drawText(emoji, right, top, paint)
-                             canvas.nativeCanvas.drawText(emoji, right, bottom, paint)
+                             canvas.save()
+                             val rot = if (isFront) -face.headEulerAngleZ else face.headEulerAngleZ
+                             canvas.translate(centerX, centerY)
+                             canvas.rotate(rot)
+                             
+                             val w = (right - left) / 2
+                             val h = (bottom - top) / 2
+                             canvas.nativeCanvas.drawText(emoji, -w, -h, paint.apply { textSize = w*2f*0.5f })
+                             canvas.nativeCanvas.drawText(emoji, w, -h, paint)
+                             canvas.nativeCanvas.drawText(emoji, w, h, paint)
+                             canvas.restore()
                          }
                     } else if (selectedEffect.type == AREffectType.FACE_MASK) {
                          drawIntoCanvas { canvas ->
+                             canvas.save()
+                             val rot = if (isFront) -face.headEulerAngleZ else face.headEulerAngleZ
+                             canvas.translate(centerX, centerY + (bottom - top) * 0.2f)
+                             canvas.rotate(rot)
                              canvas.nativeCanvas.drawText(
                                  selectedEffect.emojiAsset ?: "🦊",
-                                 centerX,
-                                 centerY + (bottom - top) * 0.2f, // Anchor slightly lower to cover face better
+                                 0f,
+                                 0f,
                                  paint
                              )
+                             canvas.restore()
                          }
                     }
                 }
@@ -751,25 +785,36 @@ fun CameraPreviewScreen(
                                         .background(if (selectedEffect == effect) AccentRed else Color.Transparent)
                                         .padding(2.dp)
                                 ) {
-                                    Box(
-                                        contentAlignment = Alignment.Center,
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .clip(RoundedCornerShape(12.dp))
-                                            .background(DarkGray)
-                                    ) {
-                                        if (effect.emojiAsset != null) {
-                                            Text(effect.emojiAsset, fontSize = 28.sp)
-                                        } else if (effect.id == "e_0") {
-                                            Icon(Icons.Default.Block, contentDescription = "None", tint = Color.White)
-                                        } else if (effect.type == AREffectType.VINTAGE || effect.type == AREffectType.CINEMATIC) {
-                                            Icon(Icons.Default.CameraRoll, contentDescription = "Film", tint = Color.White)
-                                        } else if (effect.type == AREffectType.NEON) {
-                                            Icon(Icons.Default.ColorLens, contentDescription = "Neon", tint = Color.Cyan)
-                                        } else if (effect.type == AREffectType.BEAUTY_SMOOTH) {
-                                            Icon(Icons.Default.Face, contentDescription = "Smooth", tint = Color.LightGray)
-                                        } else {
-                                            Icon(Icons.Default.AutoAwesome, contentDescription = "Effect", tint = Color.White)
+                                    if (effect.thumbnailUrl != null) {
+                                        AsyncImage(
+                                            model = effect.thumbnailUrl,
+                                            contentDescription = effect.name,
+                                            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .clip(RoundedCornerShape(12.dp))
+                                        )
+                                    } else {
+                                        Box(
+                                            contentAlignment = Alignment.Center,
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .background(DarkGray)
+                                        ) {
+                                            if (effect.emojiAsset != null) {
+                                                Text(effect.emojiAsset, fontSize = 28.sp)
+                                            } else if (effect.id == "e_0") {
+                                                Icon(Icons.Default.Block, contentDescription = "None", tint = Color.White)
+                                            } else if (effect.type == AREffectType.VINTAGE || effect.type == AREffectType.CINEMATIC) {
+                                                Icon(Icons.Default.CameraRoll, contentDescription = "Film", tint = Color.White)
+                                            } else if (effect.type == AREffectType.NEON) {
+                                                Icon(Icons.Default.ColorLens, contentDescription = "Neon", tint = Color.Cyan)
+                                            } else if (effect.type == AREffectType.BEAUTY_SMOOTH) {
+                                                Icon(Icons.Default.Face, contentDescription = "Smooth", tint = Color.LightGray)
+                                            } else {
+                                                Icon(Icons.Default.AutoAwesome, contentDescription = "Effect", tint = Color.White)
+                                            }
                                         }
                                     }
                                 }
