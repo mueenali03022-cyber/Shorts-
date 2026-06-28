@@ -388,6 +388,15 @@ fun CameraPreviewScreen(
     DisposableEffect(Unit) {
         onDispose {
             faceLandmarkerHelper.clearFaceLandmarker()
+            val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+            cameraProviderFuture.addListener({
+                try {
+                    val cameraProvider = cameraProviderFuture.get()
+                    cameraProvider.unbindAll()
+                } catch (e: Exception) {
+                    Log.e("CameraPreview", "Failed to unbind camera on dispose", e)
+                }
+            }, ContextCompat.getMainExecutor(context))
         }
     }
 
@@ -408,7 +417,7 @@ fun CameraPreviewScreen(
     
     val videoCapture = remember {
         val recorder = Recorder.Builder()
-            .setQualitySelector(QualitySelector.from(Quality.HIGHEST))
+            .setQualitySelector(QualitySelector.from(Quality.FHD))
             .build()
         VideoCapture.withOutput(recorder)
     }
@@ -416,6 +425,7 @@ fun CameraPreviewScreen(
     LaunchedEffect(lensFacing) {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         cameraProviderFuture.addListener({
+            if (lifecycleOwner.lifecycle.currentState == androidx.lifecycle.Lifecycle.State.DESTROYED) return@addListener
             try {
                 val cameraProvider = cameraProviderFuture.get()
                 val cameraSelector = CameraSelector.Builder().requireLensFacing(lensFacing).build()
@@ -424,13 +434,27 @@ fun CameraPreviewScreen(
                 }
 
                 cameraProvider.unbindAll()
-                camera = cameraProvider.bindToLifecycle(
-                    lifecycleOwner,
-                    cameraSelector,
-                    preview,
-                    imageAnalyzer,
-                    videoCapture
-                )
+                try {
+                    camera = cameraProvider.bindToLifecycle(
+                        lifecycleOwner,
+                        cameraSelector,
+                        preview,
+                        imageAnalyzer,
+                        videoCapture
+                    )
+                } catch (e: Exception) {
+                    Log.w("CameraPreview", "Failed to bind with selected lens, trying fallback", e)
+                    val fallbackLens = if (lensFacing == CameraSelector.LENS_FACING_BACK) CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK
+                    val fallbackSelector = CameraSelector.Builder().requireLensFacing(fallbackLens).build()
+                    cameraProvider.unbindAll()
+                    camera = cameraProvider.bindToLifecycle(
+                        lifecycleOwner,
+                        fallbackSelector,
+                        preview,
+                        imageAnalyzer,
+                        videoCapture
+                    )
+                }
                 camera?.cameraControl?.enableTorch(isFlashOn)
             } catch (exc: Exception) {
                 Log.e("CameraPreview", "Use case binding failed", exc)
@@ -467,132 +491,136 @@ fun CameraPreviewScreen(
             val offsetY = (size.height - scaledHeight) / 2f
 
             for (landmarks in faceLandmarksList) {
-                // If effect is NONE, we can draw landmarks for debug or nothing. Let's draw nothing unless user wants to see landmarks.
                 if (selectedEffect == AREffect.NONE) continue
+                if (landmarks.size <= 454) continue // Ensure we have enough landmarks
                 
-                // Common indices
-                // Left Eye: 159 (top), 145 (bottom), 33 (left), 133 (right)
-                // Right Eye: 386 (top), 374 (bottom), 362 (right), 263 (left)
-                // Nose Tip: 1
-                // Mouth: 13 (top lip), 14 (bottom lip), 78 (left), 308 (right)
-                // Chin: 152
-                // Forehead: 10
-                // Left Ear: 234
-                // Right Ear: 454
-                
-                val toPixel = { lm: com.google.mediapipe.tasks.components.containers.NormalizedLandmark ->
-                    Offset(lm.x() * scaledWidth + offsetX, lm.y() * scaledHeight + offsetY)
-                }
+                try {
+                    // Common indices
+                    // Left Eye: 159 (top), 145 (bottom), 33 (left), 133 (right)
+                    // Right Eye: 386 (top), 374 (bottom), 362 (right), 263 (left)
+                    // Nose Tip: 1
+                    // Mouth: 13 (top lip), 14 (bottom lip), 78 (left), 308 (right)
+                    // Chin: 152
+                    // Forehead: 10
+                    // Left Ear: 234
+                    // Right Ear: 454
+                    
+                    val toPixel = { lm: com.google.mediapipe.tasks.components.containers.NormalizedLandmark ->
+                        Offset(lm.x() * scaledWidth + offsetX, lm.y() * scaledHeight + offsetY)
+                    }
 
-                // Calculate common anchors
-                val leftEye = toPixel(landmarks[159])
-                val rightEye = toPixel(landmarks[386])
-                val nose = toPixel(landmarks[1])
-                val forehead = toPixel(landmarks[10])
+                    // Calculate common anchors
+                    val leftEye = toPixel(landmarks[159])
+                    val rightEye = toPixel(landmarks[386])
+                    val nose = toPixel(landmarks[1])
+                    val forehead = toPixel(landmarks[10])
 
-                val eyeDistance = (rightEye - leftEye).getDistance()
-                val angleRad = kotlin.math.atan2(rightEye.y - leftEye.y, rightEye.x - leftEye.x)
-                val angleDeg = Math.toDegrees(angleRad.toDouble()).toFloat()
+                    val eyeDistance = (rightEye - leftEye).getDistance()
+                    val angleRad = kotlin.math.atan2(rightEye.y - leftEye.y, rightEye.x - leftEye.x)
+                    val angleDeg = Math.toDegrees(angleRad.toDouble()).toFloat()
 
-                // Scalable AR Asset Rendering
-                val config = arAssetConfigs.find { it.effectType == selectedEffect }
-                if (config != null && config.drawableResId != null) {
-                    val bitmap = effectImages[config.effectType]
-                    if (bitmap != null) {
-                        val anchorPoint = when (config.anchorType) {
-                            AnchorType.EYES -> Offset((leftEye.x + rightEye.x) / 2, (leftEye.y + rightEye.y) / 2)
-                            AnchorType.FOREHEAD -> forehead
-                            AnchorType.FACE_CENTER, AnchorType.NOSE -> nose
+                    // Scalable AR Asset Rendering
+                    val config = arAssetConfigs.find { it.effectType == selectedEffect }
+                    if (config != null && config.drawableResId != null) {
+                        val bitmap = effectImages[config.effectType]
+                        if (bitmap != null) {
+                            val anchorPoint = when (config.anchorType) {
+                                AnchorType.EYES -> Offset((leftEye.x + rightEye.x) / 2, (leftEye.y + rightEye.y) / 2)
+                                AnchorType.FOREHEAD -> forehead
+                                AnchorType.FACE_CENTER, AnchorType.NOSE -> nose
+                            }
+
+                            val baseWidth = when (config.anchorType) {
+                                AnchorType.EYES, AnchorType.FOREHEAD -> eyeDistance
+                                else -> eyeDistance * 2f
+                            }
+                            
+                            val targetWidth = baseWidth * config.scaleMultiplier
+                            val ratio = bitmap.height.toFloat() / bitmap.width.toFloat()
+                            val targetHeight = targetWidth * ratio
+                            
+                            val finalCenter = Offset(
+                                anchorPoint.x,
+                                anchorPoint.y + (targetHeight * config.offsetYMultiplier)
+                            )
+
+                            withTransform({
+                                translate(left = finalCenter.x, top = finalCenter.y)
+                                rotate(degrees = angleDeg)
+                            }) {
+                                drawImage(
+                                    image = bitmap,
+                                    dstOffset = androidx.compose.ui.unit.IntOffset(-targetWidth.toInt() / 2, -targetHeight.toInt() / 2),
+                                    dstSize = androidx.compose.ui.unit.IntSize(targetWidth.toInt(), targetHeight.toInt())
+                                )
+                            }
                         }
-
-                        val baseWidth = when (config.anchorType) {
-                            AnchorType.EYES, AnchorType.FOREHEAD -> eyeDistance
-                            else -> eyeDistance * 2f
-                        }
-                        
-                        val targetWidth = baseWidth * config.scaleMultiplier
-                        val ratio = bitmap.height.toFloat() / bitmap.width.toFloat()
-                        val targetHeight = targetWidth * ratio
-                        
-                        val finalCenter = Offset(
-                            anchorPoint.x,
-                            anchorPoint.y + (targetHeight * config.offsetYMultiplier)
-                        )
-
+                    } else if (selectedEffect == AREffect.CYBORG_EYE) {
+                        val radius = eyeDistance * 0.8f
                         withTransform({
-                            translate(left = finalCenter.x, top = finalCenter.y)
+                            translate(left = rightEye.x, top = rightEye.y)
                             rotate(degrees = angleDeg)
                         }) {
-                            drawImage(
-                                image = bitmap,
-                                dstOffset = androidx.compose.ui.unit.IntOffset(-targetWidth.toInt() / 2, -targetHeight.toInt() / 2),
-                                dstSize = androidx.compose.ui.unit.IntSize(targetWidth.toInt(), targetHeight.toInt())
+                            // Glowing red eye
+                            drawCircle(color = Color.Red.copy(alpha=0.3f), radius = radius * 1.5f)
+                            drawCircle(color = Color.Red.copy(alpha=0.6f), radius = radius)
+                            drawCircle(color = Color.White, radius = radius * 0.2f)
+                            
+                            // Scanner line using infinite transition
+                            val scannerY = scannerOffset * radius
+                            drawLine(
+                                color = Color.Red,
+                                start = Offset(-radius * 1.2f, scannerY),
+                                end = Offset(radius * 1.2f, scannerY),
+                                strokeWidth = 4f
                             )
                         }
-                    }
-                } else if (selectedEffect == AREffect.CYBORG_EYE) {
-                    val radius = eyeDistance * 0.8f
-                    withTransform({
-                        translate(left = rightEye.x, top = rightEye.y)
-                        rotate(degrees = angleDeg)
-                    }) {
-                        // Glowing red eye
-                        drawCircle(color = Color.Red.copy(alpha=0.3f), radius = radius * 1.5f)
-                        drawCircle(color = Color.Red.copy(alpha=0.6f), radius = radius)
-                        drawCircle(color = Color.White, radius = radius * 0.2f)
-                        
-                        // Scanner line using infinite transition
-                        val scannerY = scannerOffset * radius
-                        drawLine(
-                            color = Color.Red,
-                            start = Offset(-radius * 1.2f, scannerY),
-                            end = Offset(radius * 1.2f, scannerY),
-                            strokeWidth = 4f
-                        )
-                    }
-                } else if (selectedEffect == AREffect.NEON_CONTOUR) {
-                    // Face Oval
-                    val ovalIndices = listOf(10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109)
-                    val ovalPath = androidx.compose.ui.graphics.Path().apply {
-                        ovalIndices.forEachIndexed { index, i ->
-                            val pt = toPixel(landmarks[i])
-                            if (index == 0) moveTo(pt.x, pt.y) else lineTo(pt.x, pt.y)
+                    } else if (selectedEffect == AREffect.NEON_CONTOUR) {
+                        // Face Oval
+                        val ovalIndices = listOf(10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109)
+                        val ovalPath = androidx.compose.ui.graphics.Path().apply {
+                            ovalIndices.forEachIndexed { index, i ->
+                                val pt = toPixel(landmarks[i])
+                                if (index == 0) moveTo(pt.x, pt.y) else lineTo(pt.x, pt.y)
+                            }
+                            close()
                         }
-                        close()
+                        drawPath(ovalPath, color = Color.Cyan.copy(alpha = 0.8f), style = Stroke(width = 5f))
+                        drawPath(ovalPath, color = Color.Blue.copy(alpha = 0.4f), style = Stroke(width = 15f)) // glow
+                    } else if (selectedEffect == AREffect.FACE_PAINT) {
+                        // Face paint strips
+                        val fhLeft = toPixel(landmarks[71])
+                        val fhRight = toPixel(landmarks[301])
+                        drawLine(color = Color.Yellow.copy(alpha=0.7f), start = fhLeft, end = fhRight, strokeWidth = 15f)
+                        
+                        val cheekLeftStart = toPixel(landmarks[116])
+                        val cheekLeftEnd = toPixel(landmarks[205])
+                        drawLine(color = Color.Red.copy(alpha=0.7f), start = cheekLeftStart, end = cheekLeftEnd, strokeWidth = 10f)
+                        
+                        val cheekRightStart = toPixel(landmarks[345])
+                        val cheekRightEnd = toPixel(landmarks[425])
+                        drawLine(color = Color.Red.copy(alpha=0.7f), start = cheekRightStart, end = cheekRightEnd, strokeWidth = 10f)
+                    } else if (selectedEffect == AREffect.MAKEUP) {
+                        val leftLip = toPixel(landmarks[78])
+                        val rightLip = toPixel(landmarks[308])
+                        val topLip = toPixel(landmarks[13])
+                        val bottomLip = toPixel(landmarks[14])
+                        
+                        val lipPath = androidx.compose.ui.graphics.Path().apply {
+                            moveTo(leftLip.x, leftLip.y)
+                            quadraticTo(topLip.x, topLip.y - 10f, rightLip.x, rightLip.y)
+                            quadraticTo(bottomLip.x, bottomLip.y + 10f, leftLip.x, leftLip.y)
+                            close()
+                        }
+                        drawPath(lipPath, color = Color.Red.copy(alpha=0.4f))
+                        
+                        val leftCheek = toPixel(landmarks[116])
+                        val rightCheek = toPixel(landmarks[345])
+                        drawCircle(color = Color.Magenta.copy(alpha=0.2f), radius = eyeDistance * 0.5f, center = leftCheek)
+                        drawCircle(color = Color.Magenta.copy(alpha=0.2f), radius = eyeDistance * 0.5f, center = rightCheek)
                     }
-                    drawPath(ovalPath, color = Color.Cyan.copy(alpha = 0.8f), style = Stroke(width = 5f))
-                    drawPath(ovalPath, color = Color.Blue.copy(alpha = 0.4f), style = Stroke(width = 15f)) // glow
-                } else if (selectedEffect == AREffect.FACE_PAINT) {
-                    // Face paint strips
-                    val fhLeft = toPixel(landmarks[71])
-                    val fhRight = toPixel(landmarks[301])
-                    drawLine(color = Color.Yellow.copy(alpha=0.7f), start = fhLeft, end = fhRight, strokeWidth = 15f)
-                    
-                    val cheekLeftStart = toPixel(landmarks[116])
-                    val cheekLeftEnd = toPixel(landmarks[205])
-                    drawLine(color = Color.Red.copy(alpha=0.7f), start = cheekLeftStart, end = cheekLeftEnd, strokeWidth = 10f)
-                    
-                    val cheekRightStart = toPixel(landmarks[345])
-                    val cheekRightEnd = toPixel(landmarks[425])
-                    drawLine(color = Color.Red.copy(alpha=0.7f), start = cheekRightStart, end = cheekRightEnd, strokeWidth = 10f)
-                } else if (selectedEffect == AREffect.MAKEUP) {
-                    val leftLip = toPixel(landmarks[78])
-                    val rightLip = toPixel(landmarks[308])
-                    val topLip = toPixel(landmarks[13])
-                    val bottomLip = toPixel(landmarks[14])
-                    
-                    val lipPath = androidx.compose.ui.graphics.Path().apply {
-                        moveTo(leftLip.x, leftLip.y)
-                        quadraticTo(topLip.x, topLip.y - 10f, rightLip.x, rightLip.y)
-                        quadraticTo(bottomLip.x, bottomLip.y + 10f, leftLip.x, leftLip.y)
-                        close()
-                    }
-                    drawPath(lipPath, color = Color.Red.copy(alpha=0.4f))
-                    
-                    val leftCheek = toPixel(landmarks[116])
-                    val rightCheek = toPixel(landmarks[345])
-                    drawCircle(color = Color.Magenta.copy(alpha=0.2f), radius = eyeDistance * 0.5f, center = leftCheek)
-                    drawCircle(color = Color.Magenta.copy(alpha=0.2f), radius = eyeDistance * 0.5f, center = rightCheek)
+                } catch (e: Exception) {
+                    // Ignore drawing errors if landmarks are incomplete or invalid
                 }
             }
         }

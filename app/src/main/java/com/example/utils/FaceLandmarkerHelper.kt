@@ -34,13 +34,7 @@ class FaceLandmarkerHelper(
     private fun setupFaceLandmarker() {
         val baseOptionBuilder = BaseOptions.builder()
         baseOptionBuilder.setDelegate(Delegate.CPU)
-        val modelFile = File(context.filesDir, "face_landmarker.task")
-        if (modelFile.exists()) {
-            baseOptionBuilder.setModelAssetPath(modelFile.absolutePath)
-        } else {
-            // Fallback to assets if it's there
-            baseOptionBuilder.setModelAssetPath("face_landmarker.task")
-        }
+        baseOptionBuilder.setModelAssetPath("face_landmarker.task")
 
         try {
             val baseOptions = baseOptionBuilder.build()
@@ -64,6 +58,8 @@ class FaceLandmarkerHelper(
         }
     }
 
+    private var lastFrameTime = 0L
+
     fun detectLiveStream(
         imageProxy: ImageProxy,
         isFrontCamera: Boolean
@@ -72,24 +68,26 @@ class FaceLandmarkerHelper(
             imageProxy.close()
             return
         }
-        val frameTime = SystemClock.uptimeMillis()
-
-        val bitmapBuffer = Bitmap.createBitmap(
-            imageProxy.width,
-            imageProxy.height,
-            Bitmap.Config.ARGB_8888
-        )
-        imageProxy.use { proxy -> 
-            bitmapBuffer.copyPixelsFromBuffer(proxy.planes[0].buffer) 
+        var frameTime = SystemClock.uptimeMillis()
+        if (frameTime <= lastFrameTime) {
+            frameTime = lastFrameTime + 1
         }
+        lastFrameTime = frameTime
+
+        val bitmapBuffer = imageProxy.toBitmap()
+        val rotationDegrees = imageProxy.imageInfo.rotationDegrees.toFloat()
+        imageProxy.close()
 
         val matrix = Matrix().apply {
-            postRotate(imageProxy.imageInfo.rotationDegrees.toFloat())
+            postRotate(rotationDegrees)
         }
         var rotatedBitmap = Bitmap.createBitmap(
             bitmapBuffer, 0, 0, bitmapBuffer.width, bitmapBuffer.height,
             matrix, true
         )
+        if (rotatedBitmap != bitmapBuffer) {
+            bitmapBuffer.recycle()
+        }
 
         if (isFrontCamera) {
             val flipMatrix = Matrix()
@@ -108,7 +106,11 @@ class FaceLandmarkerHelper(
 
     @VisibleForTesting
     fun detectAsync(mpImage: MPImage, frameTime: Long) {
-        faceLandmarker?.detectAsync(mpImage, frameTime)
+        try {
+            faceLandmarker?.detectAsync(mpImage, frameTime)
+        } catch (e: Exception) {
+            Log.e("FaceLandmarkerHelper", "Error during face detection", e)
+        }
     }
 
     private fun returnLivestreamResult(
