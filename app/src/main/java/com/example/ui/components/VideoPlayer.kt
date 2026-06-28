@@ -38,12 +38,19 @@ fun VideoPlayer(
         }
     }
 
+    DisposableEffect(exoPlayer) {
+        onDispose {
+            exoPlayer.release()
+        }
+    }
+
     DisposableEffect(videoUrl) {
         val mediaItem = MediaItem.fromUri(videoUrl)
         exoPlayer.setMediaItem(mediaItem)
         exoPlayer.prepare()
         onDispose {
-            exoPlayer.release()
+            exoPlayer.stop()
+            exoPlayer.clearMediaItems()
         }
     }
 

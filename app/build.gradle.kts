@@ -1,3 +1,4 @@
+import java.net.URL
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.kotlin.compose)
@@ -108,11 +109,9 @@ dependencies {
   implementation(libs.logging.interceptor)
   implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
+  implementation("com.google.mediapipe:tasks-vision:0.10.14")
   // implementation(libs.play.services.location)
   implementation(libs.retrofit)
-  implementation(libs.mlkit.facedetection)
-  implementation("com.google.mlkit:face-mesh-detection:16.0.0-beta1")
-  implementation("com.google.mediapipe:tasks-vision:0.10.14")
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
@@ -131,4 +130,23 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.tooling)
   "ksp"(libs.androidx.room.compiler)
   "ksp"(libs.moshi.kotlin.codegen)
+}
+
+tasks.register("downloadModel") {
+    notCompatibleWithConfigurationCache("Downloads a model from internet")
+    doLast {
+        val f = file("src/main/assets/face_landmarker.task")
+        if (!f.exists()) {
+            f.parentFile.mkdirs()
+            URL("https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task").openStream().use { input ->
+                f.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+        }
+    }
+}
+
+tasks.named("preBuild") {
+    dependsOn("downloadModel")
 }

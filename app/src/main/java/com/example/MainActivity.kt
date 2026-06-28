@@ -41,8 +41,8 @@ class MainActivity : ComponentActivity() {
           val videos by appViewModel.videos.collectAsState()
           val unreadCount by appViewModel.unreadCount.collectAsState()
 
-          // Temporary bypass for AR effects testing
-          if (false && currentUser == null) {
+          // Check for authenticated user before showing main app content
+          if (currentUser == null) {
               LoginScreen(
                   isLoading = isLoading,
                   errorMessage = errorMessage,

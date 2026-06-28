@@ -1,24 +1,6 @@
 package com.example.ui.screens
 
-import coil.compose.AsyncImage
-import coil.imageLoader
-import coil.request.ImageRequest
-import coil.request.SuccessResult
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.graphics.ColorMatrix
 import android.os.Build
-import androidx.compose.ui.graphics.asComposeRenderEffect
-import androidx.compose.ui.graphics.graphicsLayer
-import com.example.utils.AREffectConfig
-import com.example.utils.AREffectType
-import com.example.utils.AREffectsSystem
-import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.ImageProxy
-import androidx.compose.ui.graphics.nativeCanvas
-import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
-import androidx.compose.animation.core.animateFloat
 import android.Manifest
 import android.content.Context
 import android.net.Uri
@@ -71,9 +53,39 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.util.concurrent.Executor
 
+import androidx.camera.core.ImageProxy
+import androidx.camera.core.ImageAnalysis
+import com.example.utils.FaceLandmarkerHelper
+import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarkerResult
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.res.imageResource
+import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.ui.graphics.graphicsLayer
+
 enum class UploadStep {
     Camera, Preview, Details
 }
+
+enum class AREffect {
+    NONE, GLASSES, HAT, ANIMAL_EARS, MAKEUP, STICKER,
+    NEON_CONTOUR, CYBORG_EYE, FACE_PAINT
+}
+
+enum class AnchorType {
+    EYES, FOREHEAD, FACE_CENTER, NOSE
+}
+
+data class ARAssetConfig(
+    val effectType: AREffect,
+    val drawableResId: Int?,
+    val anchorType: AnchorType,
+    val scaleMultiplier: Float,
+    val offsetYMultiplier: Float = 0f
+)
 
 @OptIn(ExperimentalPermissionsApi::class, ExperimentalMaterial3Api::class)
 @Composable
@@ -324,60 +336,81 @@ fun CameraPreviewScreen(
     var isFlashOn by remember { mutableStateOf(false) }
     var camera by remember { mutableStateOf<androidx.camera.core.Camera?>(null) }
     
-    var showEffects by remember { mutableStateOf(false) }
-    var selectedEffect by remember { mutableStateOf(AREffectsSystem.presets.first()) }
-    
     val galleryLauncher = rememberLauncherForActivityResult(contract = ActivityResultContracts.GetContent()) { uri: Uri? ->
         if (uri != null) {
             onVideoRecorded(uri)
         }
     }
 
-    val previewView = remember { PreviewView(context) }
-    var detectedFaces by remember { mutableStateOf<List<com.google.mlkit.vision.face.Face>>(emptyList()) }
+    val arAssetConfigs = listOf(
+        ARAssetConfig(AREffect.GLASSES, com.example.R.drawable.glasses_3d, AnchorType.EYES, 2.5f),
+        ARAssetConfig(AREffect.ANIMAL_EARS, com.example.R.drawable.mask_animal, AnchorType.FOREHEAD, 1.5f, -0.8f),
+        ARAssetConfig(AREffect.STICKER, com.example.R.drawable.sticker_heart, AnchorType.FACE_CENTER, 1.0f)
+    )
+
+    val effectImages = remember { mutableMapOf<AREffect, androidx.compose.ui.graphics.ImageBitmap>() }
     
-    var detectedFaceMeshes by remember { mutableStateOf<List<com.google.mlkit.vision.facemesh.FaceMesh>>(emptyList()) }
+    // Load images
+    arAssetConfigs.forEach { config ->
+        if (config.drawableResId != null) {
+            val bitmap = androidx.compose.ui.graphics.ImageBitmap.imageResource(id = config.drawableResId)
+            LaunchedEffect(Unit) {
+                effectImages[config.effectType] = bitmap
+            }
+        }
+    }
+
+    val infiniteTransition = androidx.compose.animation.core.rememberInfiniteTransition()
+    val scannerOffset by infiniteTransition.animateFloat(
+        initialValue = -1f,
+        targetValue = 1f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            animation = androidx.compose.animation.core.tween(1500, easing = androidx.compose.animation.core.LinearEasing),
+            repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
+        )
+    )
+
+    val previewView = remember { PreviewView(context).apply { implementationMode = PreviewView.ImplementationMode.COMPATIBLE } }
+    var landmarkerResult by remember { mutableStateOf<FaceLandmarkerHelper.ResultBundle?>(null) }
+    var selectedEffect by remember { mutableStateOf(AREffect.NONE) }
+    
+    val faceLandmarkerHelper = remember {
+        FaceLandmarkerHelper(context, object : FaceLandmarkerHelper.LandmarkerListener {
+            override fun onError(error: String) {
+                Log.e("CameraPreview", "Landmarker error: $error")
+            }
+            override fun onResults(resultBundle: FaceLandmarkerHelper.ResultBundle) {
+                landmarkerResult = resultBundle
+            }
+        })
+    }
+    
+    DisposableEffect(Unit) {
+        onDispose {
+            faceLandmarkerHelper.clearFaceLandmarker()
+        }
+    }
+
+    val imageAnalyzer = remember {
+        ImageAnalysis.Builder()
+            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+            .build()
+            .also { analysis ->
+                analysis.setAnalyzer(ContextCompat.getMainExecutor(context)) { imageProxy ->
+                    faceLandmarkerHelper.detectLiveStream(
+                        imageProxy = imageProxy,
+                        isFrontCamera = lensFacing == CameraSelector.LENS_FACING_FRONT
+                    )
+                }
+            }
+    }
     
     val videoCapture = remember {
         val recorder = Recorder.Builder()
             .setQualitySelector(QualitySelector.from(Quality.HIGHEST))
             .build()
         VideoCapture.withOutput(recorder)
-    }
-
-    val imageAnalyzer = remember {
-        val options = com.google.mlkit.vision.face.FaceDetectorOptions.Builder()
-            .setPerformanceMode(com.google.mlkit.vision.face.FaceDetectorOptions.PERFORMANCE_MODE_FAST)
-            .setLandmarkMode(com.google.mlkit.vision.face.FaceDetectorOptions.LANDMARK_MODE_ALL)
-            .build()
-        val detector = com.google.mlkit.vision.face.FaceDetection.getClient(options)
-        
-        val meshOptions = com.google.mlkit.vision.facemesh.FaceMeshDetectorOptions.Builder()
-            .setUseCase(com.google.mlkit.vision.facemesh.FaceMeshDetectorOptions.FACE_MESH)
-            .build()
-        val meshDetector = com.google.mlkit.vision.facemesh.FaceMeshDetection.getClient(meshOptions)
-
-        ImageAnalysis.Builder()
-            .setTargetResolution(android.util.Size(480, 640))
-            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-            .build()
-            .also { analysis ->
-                analysis.setAnalyzer(ContextCompat.getMainExecutor(context)) { imageProxy ->
-                    @androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
-                    val mediaImage = imageProxy.image
-                    if (mediaImage != null) {
-                        val image = com.google.mlkit.vision.common.InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
-                        com.google.android.gms.tasks.Tasks.whenAll(
-                            detector.process(image).addOnSuccessListener { detectedFaces = it },
-                            meshDetector.process(image).addOnSuccessListener { detectedFaceMeshes = it }
-                        ).addOnCompleteListener {
-                            imageProxy.close()
-                        }
-                    } else {
-                        imageProxy.close()
-                    }
-                }
-            }
     }
 
     LaunchedEffect(lensFacing) {
@@ -395,8 +428,8 @@ fun CameraPreviewScreen(
                     lifecycleOwner,
                     cameraSelector,
                     preview,
-                    videoCapture,
-                    imageAnalyzer
+                    imageAnalyzer,
+                    videoCapture
                 )
                 camera?.cameraControl?.enableTorch(isFlashOn)
             } catch (exc: Exception) {
@@ -410,300 +443,156 @@ fun CameraPreviewScreen(
     }
 
     val mainExecutor: Executor = ContextCompat.getMainExecutor(context)
-    
-    val infiniteTransition = androidx.compose.animation.core.rememberInfiniteTransition()
-    val shakeOffset by infiniteTransition.animateFloat(
-        initialValue = -5f,
-        targetValue = 5f,
-        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
-            animation = androidx.compose.animation.core.tween(50, easing = androidx.compose.animation.core.FastOutLinearInEasing),
-            repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
-        )
-    )
-    val glitchOffset by infiniteTransition.animateFloat(
-        initialValue = -20f,
-        targetValue = 20f,
-        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
-            animation = androidx.compose.animation.core.tween(20, easing = androidx.compose.animation.core.FastOutLinearInEasing),
-            repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
-        )
-    )
-
-    var effectBitmap by remember(selectedEffect) { mutableStateOf<android.graphics.Bitmap?>(null) }
-    
-    LaunchedEffect(selectedEffect) {
-        if (selectedEffect.assetUrl != null || selectedEffect.thumbnailUrl != null) {
-            val url = selectedEffect.assetUrl ?: selectedEffect.thumbnailUrl
-            val request = ImageRequest.Builder(context)
-                .data(url)
-                .allowHardware(false)
-                .build()
-            val result = context.imageLoader.execute(request)
-            if (result is SuccessResult) {
-                val drawable = result.drawable
-                if (drawable is android.graphics.drawable.BitmapDrawable) {
-                    effectBitmap = drawable.bitmap
-                }
-            }
-        } else {
-            effectBitmap = null
-        }
-    }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(
             factory = { previewView },
-            modifier = Modifier.fillMaxSize().graphicsLayer {
-                if (selectedEffect.type == AREffectType.GLITCH) {
-                    translationX = glitchOffset
-                }
+            modifier = Modifier.fillMaxSize()
+        )
+        
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val result = landmarkerResult ?: return@Canvas
+            val faceLandmarksList = result.result.faceLandmarks() ?: return@Canvas
+            if (faceLandmarksList.isEmpty()) return@Canvas
+
+            val imageWidth = result.inputImageWidth.toFloat()
+            val imageHeight = result.inputImageHeight.toFloat()
+            val scaleFactor = maxOf(size.width / imageWidth, size.height / imageHeight)
+            
+            // To properly map, calculate scaled dimensions
+            val scaledWidth = imageWidth * scaleFactor
+            val scaledHeight = imageHeight * scaleFactor
+            
+            val offsetX = (size.width - scaledWidth) / 2f
+            val offsetY = (size.height - scaledHeight) / 2f
+
+            for (landmarks in faceLandmarksList) {
+                // If effect is NONE, we can draw landmarks for debug or nothing. Let's draw nothing unless user wants to see landmarks.
+                if (selectedEffect == AREffect.NONE) continue
                 
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    var currentRenderEffect: android.graphics.RenderEffect? = null
-                    
-                    if (selectedEffect.colorMatrix != null) {
-                        currentRenderEffect = android.graphics.RenderEffect.createColorFilterEffect(android.graphics.ColorMatrixColorFilter(selectedEffect.colorMatrix!!))
-                    }
-                    if (selectedEffect.type == AREffectType.BEAUTY_SMOOTH || selectedEffect.type == AREffectType.GLOW) {
-                        val blurEffect = android.graphics.RenderEffect.createBlurEffect(10f * selectedEffect.intensity, 10f * selectedEffect.intensity, android.graphics.Shader.TileMode.MIRROR)
-                        currentRenderEffect = if (currentRenderEffect != null) {
-                            android.graphics.RenderEffect.createChainEffect(blurEffect, currentRenderEffect)
-                        } else blurEffect
-                    }
-                    if (currentRenderEffect != null) {
-                        renderEffect = currentRenderEffect.asComposeRenderEffect()
-                    }
+                // Common indices
+                // Left Eye: 159 (top), 145 (bottom), 33 (left), 133 (right)
+                // Right Eye: 386 (top), 374 (bottom), 362 (right), 263 (left)
+                // Nose Tip: 1
+                // Mouth: 13 (top lip), 14 (bottom lip), 78 (left), 308 (right)
+                // Chin: 152
+                // Forehead: 10
+                // Left Ear: 234
+                // Right Ear: 454
+                
+                val toPixel = { lm: com.google.mediapipe.tasks.components.containers.NormalizedLandmark ->
+                    Offset(lm.x() * scaledWidth + offsetX, lm.y() * scaledHeight + offsetY)
                 }
-            }
-        )
 
-        // Only draw Canvas overlays if we're not purely a shader effect
-        val isShaderOnlyEffect = selectedEffect.type in listOf(
-            AREffectType.NONE,
-            AREffectType.NEON,
-            AREffectType.GLITCH,
-            AREffectType.VHS,
-            AREffectType.CINEMATIC,
-            AREffectType.VINTAGE
-        )
+                // Calculate common anchors
+                val leftEye = toPixel(landmarks[159])
+                val rightEye = toPixel(landmarks[386])
+                val nose = toPixel(landmarks[1])
+                val forehead = toPixel(landmarks[10])
 
-        if (!isShaderOnlyEffect) {
-            androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
-                val scaleX = size.width / 480f 
-                val scaleY = size.height / 640f
-                val isFront = lensFacing == CameraSelector.LENS_FACING_FRONT
+                val eyeDistance = (rightEye - leftEye).getDistance()
+                val angleRad = kotlin.math.atan2(rightEye.y - leftEye.y, rightEye.x - leftEye.x)
+                val angleDeg = Math.toDegrees(angleRad.toDouble()).toFloat()
 
-                for (face in detectedFaces) {
-                    val rect = face.boundingBox
-                    val origLeft = rect.left.toFloat()
-                    val origRight = rect.right.toFloat()
-                    val left = (if (isFront) 480f - origRight else origLeft) * scaleX
-                    val right = (if (isFront) 480f - origLeft else origRight) * scaleX
-                    val top = rect.top * scaleY
-                    val bottom = rect.bottom * scaleY
-                    val centerX = left + (right - left) / 2
-                    val centerY = top + (bottom - top) / 2
-                    
-                    val paint = android.graphics.Paint().apply {
-                        textSize = (right - left) * 1.5f
-                        textAlign = android.graphics.Paint.Align.CENTER
-                    }
+                // Scalable AR Asset Rendering
+                val config = arAssetConfigs.find { it.effectType == selectedEffect }
+                if (config != null && config.drawableResId != null) {
+                    val bitmap = effectImages[config.effectType]
+                    if (bitmap != null) {
+                        val anchorPoint = when (config.anchorType) {
+                            AnchorType.EYES -> Offset((leftEye.x + rightEye.x) / 2, (leftEye.y + rightEye.y) / 2)
+                            AnchorType.FOREHEAD -> forehead
+                            AnchorType.FACE_CENTER, AnchorType.NOSE -> nose
+                        }
 
-                    val mesh = detectedFaceMeshes.firstOrNull { android.graphics.Rect.intersects(it.boundingBox, face.boundingBox) } ?: detectedFaceMeshes.firstOrNull()
-                    var rotZ = if (isFront) -face.headEulerAngleZ else face.headEulerAngleZ
-                    var faceContourPath: androidx.compose.ui.graphics.Path? = null
-                    
-                    if (mesh != null) {
-                        val leftEye = mesh.getPoints(com.google.mlkit.vision.facemesh.FaceMesh.LEFT_EYE).firstOrNull()
-                        val rightEye = mesh.getPoints(com.google.mlkit.vision.facemesh.FaceMesh.RIGHT_EYE).firstOrNull()
-                        if (leftEye != null && rightEye != null) {
-                            val dx = rightEye.position.x - leftEye.position.x
-                            val dy = rightEye.position.y - leftEye.position.y
-                            var angle = Math.toDegrees(Math.atan2(dy.toDouble(), dx.toDouble())).toFloat()
-                            if (isFront) {
-                                angle = if (angle > 0) 180 - angle else -180 - angle
-                            }
-                            rotZ = angle
+                        val baseWidth = when (config.anchorType) {
+                            AnchorType.EYES, AnchorType.FOREHEAD -> eyeDistance
+                            else -> eyeDistance * 2f
                         }
                         
-                        val ovalPoints = mesh.getPoints(com.google.mlkit.vision.facemesh.FaceMesh.FACE_OVAL)
-                        if (ovalPoints.isNotEmpty()) {
-                            faceContourPath = androidx.compose.ui.graphics.Path()
-                            val first = ovalPoints.first().position
-                            faceContourPath.moveTo(
-                                (if (isFront) 480f - first.x else first.x) * scaleX,
-                                first.y * scaleY
+                        val targetWidth = baseWidth * config.scaleMultiplier
+                        val ratio = bitmap.height.toFloat() / bitmap.width.toFloat()
+                        val targetHeight = targetWidth * ratio
+                        
+                        val finalCenter = Offset(
+                            anchorPoint.x,
+                            anchorPoint.y + (targetHeight * config.offsetYMultiplier)
+                        )
+
+                        withTransform({
+                            translate(left = finalCenter.x, top = finalCenter.y)
+                            rotate(degrees = angleDeg)
+                        }) {
+                            drawImage(
+                                image = bitmap,
+                                dstOffset = androidx.compose.ui.unit.IntOffset(-targetWidth.toInt() / 2, -targetHeight.toInt() / 2),
+                                dstSize = androidx.compose.ui.unit.IntSize(targetWidth.toInt(), targetHeight.toInt())
                             )
-                            for (i in 1 until ovalPoints.size) {
-                                val pt = ovalPoints[i].position
-                                faceContourPath.lineTo(
-                                    (if (isFront) 480f - pt.x else pt.x) * scaleX,
-                                    pt.y * scaleY
-                                )
-                            }
-                            faceContourPath.close()
                         }
                     }
-
-                    if (selectedEffect.type == AREffectType.MAKEUP) {
-                         // precise lip tracking
-                         val lowerLip = mesh?.getPoints(com.google.mlkit.vision.facemesh.FaceMesh.LOWER_LIP_BOTTOM)?.firstOrNull()
-                         val mx = lowerLip?.let { (if (isFront) 480f - it.position.x else it.position.x) * scaleX } ?: face.getLandmark(com.google.mlkit.vision.face.FaceLandmark.MOUTH_BOTTOM)?.let { (if (isFront) 480f - it.position.x else it.position.x) * scaleX } ?: centerX
-                         val my = lowerLip?.let { it.position.y * scaleY } ?: face.getLandmark(com.google.mlkit.vision.face.FaceLandmark.MOUTH_BOTTOM)?.let { it.position.y * scaleY } ?: centerY
-                         
-                         drawIntoCanvas { canvas ->
-                             canvas.save()
-                             canvas.translate(mx, my - (bottom - top) * 0.05f)
-                             canvas.rotate(rotZ)
-                             if (selectedEffect.emojiAsset != null) {
-                                 canvas.nativeCanvas.drawText(
-                                     selectedEffect.emojiAsset!!,
-                                     0f,
-                                     0f,
-                                     paint.apply { textSize = (right - left) * 0.4f }
-                                 )
-                             }
-                             canvas.restore()
-                         }
-                    } else if (selectedEffect.type == AREffectType.FACE_DECORATION) {
-                         // precise nose bridge tracking for glasses
-                         val noseBridge = mesh?.getPoints(com.google.mlkit.vision.facemesh.FaceMesh.NOSE_BRIDGE)?.firstOrNull()
-                         val nx = noseBridge?.let { (if (isFront) 480f - it.position.x else it.position.x) * scaleX } ?: face.getLandmark(com.google.mlkit.vision.face.FaceLandmark.NOSE_BASE)?.let { (if (isFront) 480f - it.position.x else it.position.x) * scaleX } ?: centerX
-                         val ny = noseBridge?.let { it.position.y * scaleY } ?: face.getLandmark(com.google.mlkit.vision.face.FaceLandmark.NOSE_BASE)?.let { it.position.y * scaleY } ?: centerY
-                         
-                         if (effectBitmap != null) {
-                             val bmp = effectBitmap!!.asImageBitmap()
-                             val widthToDraw = (right - left) * 1.3f // glasses scale
-                             val heightToDraw = widthToDraw * (bmp.height.toFloat() / bmp.width.toFloat())
-                             drawIntoCanvas { canvas ->
-                                 canvas.save()
-                                 canvas.translate(nx, ny)
-                                 canvas.rotate(rotZ)
-                                 drawImage(
-                                     image = bmp,
-                                     dstOffset = androidx.compose.ui.unit.IntOffset((-widthToDraw/2).toInt(), (-heightToDraw/2).toInt()),
-                                     dstSize = IntSize(widthToDraw.toInt(), heightToDraw.toInt())
-                                 )
-                                 canvas.restore()
-                             }
-                         } else {
-                             drawIntoCanvas { canvas ->
-                                 canvas.save()
-                                 canvas.translate(nx, ny)
-                                 canvas.rotate(rotZ)
-                                 canvas.nativeCanvas.drawText(
-                                     selectedEffect.emojiAsset ?: "🕶️",
-                                     0f,
-                                     0f,
-                                     paint.apply { textSize = (right - left) * 1.2f }
-                                 )
-                                 canvas.restore()
-                             }
-                         }
-                    } else if (selectedEffect.type == AREffectType.FACE_STICKER_SCATTER) {
-                         drawIntoCanvas { canvas ->
-                             val emoji = selectedEffect.emojiAsset ?: "✨"
-                             canvas.save()
-                             canvas.translate(centerX, centerY)
-                             canvas.rotate(rotZ)
-                             
-                             if (effectBitmap != null) {
-                                 val bmp = effectBitmap!!.asImageBitmap()
-                                 val sz = (right - left) * 0.5f
-                                 val w = (right - left) / 2
-                                 val h = (bottom - top) / 2
-                                 drawImage(bmp, dstOffset = androidx.compose.ui.unit.IntOffset((-w - sz/2).toInt(), (-h - sz/2).toInt()), dstSize = IntSize(sz.toInt(), sz.toInt()))
-                                 drawImage(bmp, dstOffset = androidx.compose.ui.unit.IntOffset((w - sz/2).toInt(), (-h - sz/2).toInt()), dstSize = IntSize(sz.toInt(), sz.toInt()))
-                                 drawImage(bmp, dstOffset = androidx.compose.ui.unit.IntOffset((w - sz/2).toInt(), (h - sz/2).toInt()), dstSize = IntSize(sz.toInt(), sz.toInt()))
-                             } else {
-                                 val w = (right - left) / 2
-                                 val h = (bottom - top) / 2
-                                 canvas.nativeCanvas.drawText(emoji, -w, -h, paint.apply { textSize = w*2f*0.5f })
-                                 canvas.nativeCanvas.drawText(emoji, w, -h, paint)
-                                 canvas.nativeCanvas.drawText(emoji, w, h, paint)
-                             }
-                             canvas.restore()
-                         }
-                    } else if (selectedEffect.type == AREffectType.FACE_MASK) {
-                         drawIntoCanvas { canvas ->
-                             canvas.save()
-                             canvas.translate(centerX, centerY + (bottom - top) * 0.2f)
-                             canvas.rotate(rotZ)
-                             
-                             if (effectBitmap != null) {
-                                 val bmp = effectBitmap!!.asImageBitmap()
-                                 val widthToDraw = (right - left) * 1.8f
-                                 val heightToDraw = widthToDraw * (bmp.height.toFloat() / bmp.width.toFloat())
-                                 drawImage(
-                                     image = bmp,
-                                     dstOffset = androidx.compose.ui.unit.IntOffset((-widthToDraw/2).toInt(), (-heightToDraw/2).toInt()),
-                                     dstSize = IntSize(widthToDraw.toInt(), heightToDraw.toInt())
-                                 )
-                             } else {
-                                 canvas.nativeCanvas.drawText(
-                                     selectedEffect.emojiAsset ?: "🦊",
-                                     0f,
-                                     0f,
-                                     paint
-                                 )
-                             }
-                             canvas.restore()
-                         }
-                    }
-                    
-                    // BEAUTY or GLOW (Using exact face contour from Face Mesh)
-                    if (faceContourPath != null && (selectedEffect.type == AREffectType.BEAUTY_SMOOTH || selectedEffect.type == AREffectType.GLOW)) {
-                        drawPath(
-                             path = faceContourPath,
-                             color = Color.White.copy(alpha=0.15f * selectedEffect.intensity)
-                        )
-                    } else if (selectedEffect.type == AREffectType.BEAUTY_SMOOTH || selectedEffect.type == AREffectType.GLOW) {
-                        drawOval(
-                             color = Color.White.copy(alpha=0.15f * selectedEffect.intensity),
-                             topLeft = androidx.compose.ui.geometry.Offset(left - 20f, top - 20f),
-                             size = androidx.compose.ui.geometry.Size((right - left) + 40f, (bottom - top) + 40f)
+                } else if (selectedEffect == AREffect.CYBORG_EYE) {
+                    val radius = eyeDistance * 0.8f
+                    withTransform({
+                        translate(left = rightEye.x, top = rightEye.y)
+                        rotate(degrees = angleDeg)
+                    }) {
+                        // Glowing red eye
+                        drawCircle(color = Color.Red.copy(alpha=0.3f), radius = radius * 1.5f)
+                        drawCircle(color = Color.Red.copy(alpha=0.6f), radius = radius)
+                        drawCircle(color = Color.White, radius = radius * 0.2f)
+                        
+                        // Scanner line using infinite transition
+                        val scannerY = scannerOffset * radius
+                        drawLine(
+                            color = Color.Red,
+                            start = Offset(-radius * 1.2f, scannerY),
+                            end = Offset(radius * 1.2f, scannerY),
+                            strokeWidth = 4f
                         )
                     }
+                } else if (selectedEffect == AREffect.NEON_CONTOUR) {
+                    // Face Oval
+                    val ovalIndices = listOf(10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109)
+                    val ovalPath = androidx.compose.ui.graphics.Path().apply {
+                        ovalIndices.forEachIndexed { index, i ->
+                            val pt = toPixel(landmarks[i])
+                            if (index == 0) moveTo(pt.x, pt.y) else lineTo(pt.x, pt.y)
+                        }
+                        close()
+                    }
+                    drawPath(ovalPath, color = Color.Cyan.copy(alpha = 0.8f), style = Stroke(width = 5f))
+                    drawPath(ovalPath, color = Color.Blue.copy(alpha = 0.4f), style = Stroke(width = 15f)) // glow
+                } else if (selectedEffect == AREffect.FACE_PAINT) {
+                    // Face paint strips
+                    val fhLeft = toPixel(landmarks[71])
+                    val fhRight = toPixel(landmarks[301])
+                    drawLine(color = Color.Yellow.copy(alpha=0.7f), start = fhLeft, end = fhRight, strokeWidth = 15f)
                     
-                    if (selectedEffect.type == AREffectType.BIG_EYES) {
-                         val leftEyePoints = mesh?.getPoints(com.google.mlkit.vision.facemesh.FaceMesh.LEFT_EYE)
-                         val rightEyePoints = mesh?.getPoints(com.google.mlkit.vision.facemesh.FaceMesh.RIGHT_EYE)
-                         
-                         drawIntoCanvas { canvas ->
-                             val scaleF = 1.3f
-                             if (leftEyePoints != null && leftEyePoints.isNotEmpty()) {
-                                 val p = leftEyePoints.first().position
-                                 val cx = (if (isFront) 480f - p.x else p.x) * scaleX
-                                 val cy = p.y * scaleY
-                                 val r = (right - left) * 0.15f * scaleF
-                                 canvas.nativeCanvas.drawCircle(cx, cy, r, android.graphics.Paint().apply { color = android.graphics.Color.argb(80, 255, 255, 255) })
-                                 canvas.nativeCanvas.drawCircle(cx, cy, r * 0.6f, android.graphics.Paint().apply { color = android.graphics.Color.argb(120, 0, 100, 255) })
-                             }
-                             if (rightEyePoints != null && rightEyePoints.isNotEmpty()) {
-                                 val p = rightEyePoints.first().position
-                                 val cx = (if (isFront) 480f - p.x else p.x) * scaleX
-                                 val cy = p.y * scaleY
-                                 val r = (right - left) * 0.15f * scaleF
-                                 canvas.nativeCanvas.drawCircle(cx, cy, r, android.graphics.Paint().apply { color = android.graphics.Color.argb(80, 255, 255, 255) })
-                                 canvas.nativeCanvas.drawCircle(cx, cy, r * 0.6f, android.graphics.Paint().apply { color = android.graphics.Color.argb(120, 0, 100, 255) })
-                             }
-                         }
+                    val cheekLeftStart = toPixel(landmarks[116])
+                    val cheekLeftEnd = toPixel(landmarks[205])
+                    drawLine(color = Color.Red.copy(alpha=0.7f), start = cheekLeftStart, end = cheekLeftEnd, strokeWidth = 10f)
+                    
+                    val cheekRightStart = toPixel(landmarks[345])
+                    val cheekRightEnd = toPixel(landmarks[425])
+                    drawLine(color = Color.Red.copy(alpha=0.7f), start = cheekRightStart, end = cheekRightEnd, strokeWidth = 10f)
+                } else if (selectedEffect == AREffect.MAKEUP) {
+                    val leftLip = toPixel(landmarks[78])
+                    val rightLip = toPixel(landmarks[308])
+                    val topLip = toPixel(landmarks[13])
+                    val bottomLip = toPixel(landmarks[14])
+                    
+                    val lipPath = androidx.compose.ui.graphics.Path().apply {
+                        moveTo(leftLip.x, leftLip.y)
+                        quadraticTo(topLip.x, topLip.y - 10f, rightLip.x, rightLip.y)
+                        quadraticTo(bottomLip.x, bottomLip.y + 10f, leftLip.x, leftLip.y)
+                        close()
                     }
-
-                    if (selectedEffect.type == AREffectType.FACE_RESHAPE) {
-                         if (faceContourPath != null) {
-                             drawPath(
-                                 path = faceContourPath,
-                                 color = Color.Black.copy(alpha=0.2f * selectedEffect.intensity)
-                             )
-                         } else {
-                             drawOval(
-                                 color = Color.Black.copy(alpha=0.1f * selectedEffect.intensity),
-                                 topLeft = androidx.compose.ui.geometry.Offset(left + 30f, top + 50f),
-                                 size = androidx.compose.ui.geometry.Size((right - left) - 60f, (bottom - top) - 80f)
-                             )
-                         }
-                    }
+                    drawPath(lipPath, color = Color.Red.copy(alpha=0.4f))
+                    
+                    val leftCheek = toPixel(landmarks[116])
+                    val rightCheek = toPixel(landmarks[345])
+                    drawCircle(color = Color.Magenta.copy(alpha=0.2f), radius = eyeDistance * 0.5f, center = leftCheek)
+                    drawCircle(color = Color.Magenta.copy(alpha=0.2f), radius = eyeDistance * 0.5f, center = rightCheek)
                 }
             }
         }
@@ -788,6 +677,50 @@ fun CameraPreviewScreen(
                 .fillMaxWidth()
                 .align(Alignment.BottomCenter)
         ) {
+            // AR Effects Row
+            androidx.compose.foundation.lazy.LazyRow(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp)
+            ) {
+                items(AREffect.values().size) { index ->
+                    val effect = AREffect.values()[index]
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.clickable { selectedEffect = effect }
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(50.dp)
+                                .clip(CircleShape)
+                                .background(if (selectedEffect == effect) AccentRed else Color.DarkGray),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = when (effect) {
+                                    AREffect.NONE -> "🚫"
+                                    AREffect.GLASSES -> "👓"
+                                    AREffect.HAT -> "🎩"
+                                    AREffect.STICKER -> "❤️"
+                                    AREffect.ANIMAL_EARS -> "🐱"
+                                    AREffect.MAKEUP -> "💄"
+                                    AREffect.NEON_CONTOUR -> "✨"
+                                    AREffect.CYBORG_EYE -> "🤖"
+                                    AREffect.FACE_PAINT -> "🎨"
+                                },
+                                fontSize = 24.sp
+                            )
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = effect.name.lowercase().replace("_", " ").replaceFirstChar { it.uppercase() },
+                            color = if (selectedEffect == effect) AccentRed else Color.White,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+            }
+            
             // Options row (Photo/Video/Time)
             Row(
                 modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
@@ -808,12 +741,7 @@ fun CameraPreviewScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    IconButton(onClick = { showEffects = true }, modifier = Modifier.background(Color.Black.copy(0.3f), CircleShape)) {
-                        Icon(Icons.Default.AutoAwesome, contentDescription = "Effects", tint = Color.White, modifier = Modifier.size(24.dp))
-                    }
-                    Text("Effects", color = Color.White, fontSize = 12.sp, modifier = Modifier.padding(top=4.dp))
-                }
+                Spacer(modifier = Modifier.width(64.dp))
 
                 Box(
                     modifier = Modifier
@@ -869,105 +797,6 @@ fun CameraPreviewScreen(
                         Icon(Icons.Default.PhotoLibrary, contentDescription = "Upload", tint = Color.White, modifier = Modifier.size(24.dp))
                     }
                     Text("Upload", color = Color.White, fontSize = 12.sp, modifier = Modifier.padding(top=4.dp))
-                }
-            }
-        }
-        
-        if (showEffects) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Transparent)
-                    .clickable(
-                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                        indication = null
-                    ) { showEffects = false }
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .align(Alignment.BottomCenter)
-                        .background(Color.Black.copy(alpha = 0.8f))
-                        .clickable(
-                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                            indication = null
-                        ) {} // Block clicks
-                ) {
-                    Spacer(Modifier.height(16.dp))
-                    
-                    val categories = AREffectsSystem.categories
-                    var selectedCategory by remember { mutableStateOf<String?>(categories.first()) }
-                    
-                    androidx.compose.foundation.lazy.LazyRow(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        items(categories.size) { index ->
-                            val cat = categories[index]
-                            Text(
-                                text = cat,
-                                color = if (selectedCategory == cat) Color.White else Color.Gray,
-                                fontWeight = if (selectedCategory == cat) FontWeight.Bold else FontWeight.Normal,
-                                modifier = Modifier.clickable { selectedCategory = cat }
-                            )
-                        }
-                    }
-                    
-                    val filteredList = remember(selectedCategory) {
-                        if (selectedCategory == null) AREffectsSystem.presets else AREffectsSystem.presets.filter { it.category == selectedCategory || it.id == "e_0" }
-                    }
-                    
-                    androidx.compose.foundation.lazy.LazyRow(
-                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 32.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        items(filteredList.size) { index ->
-                            val effect = filteredList[index]
-                            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { selectedEffect = effect }) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(60.dp)
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(if (selectedEffect == effect) AccentRed else Color.Transparent)
-                                        .padding(2.dp)
-                                ) {
-                                    if (effect.thumbnailUrl != null) {
-                                        AsyncImage(
-                                            model = effect.thumbnailUrl,
-                                            contentDescription = effect.name,
-                                            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                                            modifier = Modifier
-                                                .fillMaxSize()
-                                                .clip(RoundedCornerShape(12.dp))
-                                        )
-                                    } else {
-                                        Box(
-                                            contentAlignment = Alignment.Center,
-                                            modifier = Modifier
-                                                .fillMaxSize()
-                                                .clip(RoundedCornerShape(12.dp))
-                                                .background(DarkGray)
-                                        ) {
-                                            if (effect.emojiAsset != null) {
-                                                Text(effect.emojiAsset, fontSize = 28.sp)
-                                            } else if (effect.id == "e_0") {
-                                                Icon(Icons.Default.Block, contentDescription = "None", tint = Color.White)
-                                            } else if (effect.type == AREffectType.VINTAGE || effect.type == AREffectType.CINEMATIC) {
-                                                Icon(Icons.Default.CameraRoll, contentDescription = "Film", tint = Color.White)
-                                            } else if (effect.type == AREffectType.NEON) {
-                                                Icon(Icons.Default.ColorLens, contentDescription = "Neon", tint = Color.Cyan)
-                                            } else if (effect.type == AREffectType.BEAUTY_SMOOTH) {
-                                                Icon(Icons.Default.Face, contentDescription = "Smooth", tint = Color.LightGray)
-                                            } else {
-                                                Icon(Icons.Default.AutoAwesome, contentDescription = "Effect", tint = Color.White)
-                                            }
-                                        }
-                                    }
-                                }
-                                Text(effect.name, color = Color.White, fontSize = 12.sp, modifier = Modifier.padding(top=4.dp))
-                            }
-                        }
-                    }
                 }
             }
         }
